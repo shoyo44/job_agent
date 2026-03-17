@@ -72,6 +72,14 @@ MONGODB_DB: str = os.getenv("MONGODB_DB", "job_agent").strip()
 MONGODB_COLLECTION: str = os.getenv("MONGODB_COLLECTION", "applications").strip()
 
 # ------------------------------------------------------------------
+# Telegram Bot
+# ------------------------------------------------------------------
+TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+TELEGRAM_ENABLED: bool = os.getenv("TELEGRAM_ENABLED", "false").lower() == "true"
+TELEGRAM_POLL_TIMEOUT: int = int(os.getenv("TELEGRAM_POLL_TIMEOUT", "30"))
+
+# ------------------------------------------------------------------
 # Browser / Scraping
 # ------------------------------------------------------------------
 # Path to a locally installed Chromium or Chrome binary.
@@ -81,3 +89,4 @@ HEADLESS: bool = os.getenv("HEADLESS", "false").lower() == "true"
 HUMAN_DELAY_MS: int = int(os.getenv("HUMAN_DELAY_MS", "1500"))
 # When true, use a fresh temporary browser profile each run (helps visibility/debugging).
 USE_TEMP_BROWSER_PROFILE: bool = os.getenv("USE_TEMP_BROWSER_PROFILE", "false").lower() == "true"
+RUNTIME_BROWSER_PROFILE_DIR: str = os.getenv("RUNTIME_BROWSER_PROFILE_DIR", "").strip()

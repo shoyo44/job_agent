@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -31,14 +30,30 @@ from agent.run_config import RunConfig
 from agent.tracker_agent import TrackerAgent
 from api.models import (
     AsyncRunResponse,
+    DocsSummaryResponse,
     FirebaseLoginRequest,
+    FeatureResponse,
     FirebaseUserResponse,
     RunRequest,
     RunResponse,
+    TelegramTestRequest,
+    TrackerStatusUpdateRequest,
 )
 from api.service import execute_pipeline
+from tools.telegram_bot import TelegramBotClient
 
-app = FastAPI(title="Job Agent Backend API", version="1.1.0")
+app = FastAPI(
+    title="Job Agent Backend API",
+    version="1.3.0",
+    description="FastAPI surface for the job application pipeline, tracker, and Telegram integration.",
+    openapi_tags=[
+        {"name": "auth", "description": "Firebase authentication and current-user endpoints."},
+        {"name": "diagnostics", "description": "Startup, health, config, and API discovery endpoints."},
+        {"name": "pipeline", "description": "Run the job pipeline and inspect active or completed runs."},
+        {"name": "tracker", "description": "Read or update tracked application records."},
+        {"name": "telegram", "description": "Inspect and test Telegram bot integration."},
+    ],
+)
 log = logging.getLogger("api")
 
 _RUNS: dict[str, dict[str, Any]] = {}
@@ -46,6 +61,28 @@ _RUNS_LOCK = threading.Lock()
 _STARTUP_STATUS: dict[str, Any] = {}
 _FIREBASE_READY = False
 _FIREBASE_ERROR = ""
+_TELEGRAM_BOT = TelegramBotClient()
+
+
+def _set_run_state(run_id: str, *, status_value: str, message: str, payload: dict[str, Any] | None = None) -> None:
+    with _RUNS_LOCK:
+        current = _RUNS.get(run_id, {})
+        merged_payload = dict(current.get("payload") or {})
+        if payload:
+            merged_payload.update(payload)
+        _RUNS[run_id] = {
+            "run_id": run_id,
+            "status": status_value,
+            "message": message,
+            "payload": merged_payload,
+        }
+
+
+def _safe_notify_run_finished(run_id: str, *, status: str, message: str, payload: dict[str, Any] | None = None) -> None:
+    try:
+        _TELEGRAM_BOT.notify_run_finished(run_id, status=status, message=message, payload=payload)
+    except Exception as exc:
+        log.warning("Telegram final notification failed but pipeline result is preserved: %s", exc)
 
 
 def _update_run_progress(run_id: str, progress: dict[str, Any]) -> None:
@@ -238,11 +275,29 @@ def _check_firebase() -> dict[str, Any]:
     }
 
 
+def _check_telegram() -> dict[str, Any]:
+    status_info = _TELEGRAM_BOT.get_status()
+    return {
+        "required": False,
+        "configured": status_info["token_configured"],
+        "ok": status_info["token_configured"],
+        "enabled": status_info["enabled"],
+        "auto_delivery_ready": status_info["auto_delivery_ready"],
+        "default_chat_configured": status_info["default_chat_configured"],
+        "message": (
+            "Ready for notifications"
+            if status_info["auto_delivery_ready"]
+            else "Token loaded" if status_info["token_configured"] else "Telegram bot not configured"
+        ),
+    }
+
+
 def _build_startup_status() -> dict[str, Any]:
     checks = {
         "cloudflare_workers_ai": _check_cloudflare(),
         "mongodb": _check_mongodb(),
         "firebase_auth": _check_firebase(),
+        "telegram_bot": _check_telegram(),
         "resume_file": {
             "required": False,
             "configured": True,
@@ -273,14 +328,17 @@ def startup_diagnostics() -> None:
     cf = _STARTUP_STATUS["checks"]["cloudflare_workers_ai"]
     mongo = _STARTUP_STATUS["checks"]["mongodb"]
     fb = _STARTUP_STATUS["checks"]["firebase_auth"]
+    telegram = _STARTUP_STATUS["checks"]["telegram_bot"]
     resume = _STARTUP_STATUS["checks"]["resume_file"]
     log.warning(
-        "Startup diagnostics | overall_ok=%s | CF(ok=%s, model=%s) | Firebase(ok=%s) | Mongo(ok=%s) | Resume(ok=%s, path=%s)",
+        "Startup diagnostics | overall_ok=%s | CF(ok=%s, model=%s) | Firebase(ok=%s) | Mongo(ok=%s) | Telegram(configured=%s, auto_delivery=%s) | Resume(ok=%s, path=%s)",
         _STARTUP_STATUS["overall_ok"],
         cf.get("ok"),
         cf.get("model"),
         fb.get("ok"),
         mongo.get("ok"),
+        telegram.get("configured"),
+        telegram.get("auto_delivery_ready"),
         resume.get("ok"),
         resume.get("path"),
     )
@@ -299,12 +357,90 @@ def _redacted_config() -> dict[str, Any]:
         "target_locations": config.USER_TARGET_LOCATIONS,
         "mongodb_enabled": bool(config.MONGODB_URI),
         "firebase_ready": _FIREBASE_READY,
+        "telegram_enabled": config.TELEGRAM_ENABLED,
+        "telegram_default_chat_configured": bool(config.TELEGRAM_CHAT_ID),
         "log_file_path": str(config.LOG_FILE_PATH),
         "excel_file_path": str(config.EXCEL_FILE_PATH),
     }
 
 
-@app.get("/api/v1/health")
+def _feature_map() -> dict[str, Any]:
+    return {
+        "auth": {
+            "firebase_login": "/api/v1/auth/firebase-login",
+            "me": "/api/v1/me",
+        },
+        "diagnostics": {
+            "health": "/api/v1/health",
+            "startup": "/api/v1/startup",
+            "config": "/api/v1/config",
+            "features": "/api/v1/features",
+        },
+        "pipeline": {
+            "run_sync": "/api/v1/run",
+            "run_async": "/api/v1/run/async",
+            "run_status": "/api/v1/run/{run_id}",
+            "runs_overview": "/api/v1/runs",
+        },
+        "tracker": {
+            "stats": "/api/v1/tracker/stats",
+            "history": "/api/v1/tracker/history",
+            "update_status": "/api/v1/tracker/update-status",
+        },
+        "telegram": {
+            "status": "/api/v1/telegram/status",
+            "test_message": "/api/v1/telegram/test",
+        },
+    }
+
+
+def _docs_summary() -> dict[str, Any]:
+    return {
+        "authentication": {
+            "required": True,
+            "flow": [
+                "POST /api/v1/auth/firebase-login",
+                "Use returned Firebase identity token as Bearer token",
+                "Call protected endpoints",
+            ],
+        },
+        "pipeline": {
+            "entrypoints": ["POST /api/v1/run", "POST /api/v1/run/async"],
+            "outputs": [
+                "search profile",
+                "approved jobs",
+                "cover letters",
+                "agent flow",
+                "submission results",
+            ],
+        },
+        "tracker": {
+            "read": ["GET /api/v1/tracker/stats", "GET /api/v1/tracker/history"],
+            "write": ["POST /api/v1/tracker/update-status"],
+        },
+        "telegram": {
+            "readiness": ["GET /api/v1/telegram/status", "POST /api/v1/telegram/test"],
+            "notes": [
+                "Telegram sends a single final summary after the run completes with applied results",
+                "Runtime delivery still depends on network access to api.telegram.org",
+            ],
+        },
+    }
+
+
+@app.get("/api/v1/docs-summary", response_model=DocsSummaryResponse, tags=["diagnostics"], summary="Return a frontend-friendly backend capability summary")
+def docs_summary(user: dict[str, Any] = Depends(require_auth)) -> DocsSummaryResponse:
+    _ = user
+    return DocsSummaryResponse(service="job-agent-backend", version=app.version, sections=_docs_summary())
+
+
+@app.get("/api/v1/features", response_model=FeatureResponse, tags=["diagnostics"], summary="Return discoverable backend feature endpoints")
+def features(user: dict[str, Any] = Depends(require_auth)) -> FeatureResponse:
+    _ = user
+    return FeatureResponse(service="job-agent-backend", features=_feature_map())
+
+
+@app.get("/api/v1/health", tags=["diagnostics"], summary="Check basic API liveness")
 def health() -> dict[str, Any]:
     return {
         "status": "ok",
@@ -313,19 +449,19 @@ def health() -> dict[str, Any]:
     }
 
 
-@app.get("/api/v1/startup")
+@app.get("/api/v1/startup", tags=["diagnostics"], summary="Inspect startup dependency diagnostics")
 def startup_status() -> dict[str, Any]:
     if not _STARTUP_STATUS:
         return {"status": "pending", "message": "Startup checks not executed yet."}
     return _STARTUP_STATUS
 
 
-@app.get("/api/v1/config")
+@app.get("/api/v1/config", tags=["diagnostics"], summary="Preview safe backend configuration")
 def config_preview() -> dict[str, Any]:
     return _redacted_config()
 
 
-@app.post("/api/v1/auth/firebase-login", response_model=FirebaseUserResponse)
+@app.post("/api/v1/auth/firebase-login", response_model=FirebaseUserResponse, tags=["auth"], summary="Validate Firebase token and return user profile")
 def firebase_login(request: FirebaseLoginRequest) -> FirebaseUserResponse:
     token_data = _verify_token_or_401(
         HTTPAuthorizationCredentials(scheme="Bearer", credentials=request.id_token)
@@ -338,7 +474,7 @@ def firebase_login(request: FirebaseLoginRequest) -> FirebaseUserResponse:
     )
 
 
-@app.get("/api/v1/me", response_model=FirebaseUserResponse)
+@app.get("/api/v1/me", response_model=FirebaseUserResponse, tags=["auth"], summary="Return the authenticated user")
 def me(user: dict[str, Any] = Depends(require_auth)) -> FirebaseUserResponse:
     return FirebaseUserResponse(
         uid=user.get("uid", ""),
@@ -348,7 +484,7 @@ def me(user: dict[str, Any] = Depends(require_auth)) -> FirebaseUserResponse:
     )
 
 
-@app.get("/api/v1/tracker/stats")
+@app.get("/api/v1/tracker/stats", tags=["tracker"], summary="Return tracker aggregate statistics")
 def tracker_stats(user: dict[str, Any] = Depends(require_auth)) -> dict[str, Any]:
     _ = user
     rc = RunConfig.build(
@@ -365,7 +501,7 @@ def tracker_stats(user: dict[str, Any] = Depends(require_auth)) -> dict[str, Any
     }
 
 
-@app.get("/api/v1/tracker/history")
+@app.get("/api/v1/tracker/history", tags=["tracker"], summary="Return recent tracked application history")
 def tracker_history(user: dict[str, Any] = Depends(require_auth)) -> dict[str, Any]:
     _ = user
     rc = RunConfig.build(
@@ -384,49 +520,68 @@ def tracker_history(user: dict[str, Any] = Depends(require_auth)) -> dict[str, A
     }
 
 
-@app.post("/api/v1/run", response_model=RunResponse)
+@app.get("/api/v1/telegram/status", tags=["telegram"], summary="Inspect Telegram bot readiness")
+def telegram_status(user: dict[str, Any] = Depends(require_auth)) -> dict[str, Any]:
+    _ = user
+    return _check_telegram()
+
+
+@app.post("/api/v1/telegram/test", tags=["telegram"], summary="Send a Telegram test message")
+def telegram_test(
+    request: TelegramTestRequest,
+    user: dict[str, Any] = Depends(require_auth),
+) -> dict[str, Any]:
+    _ = user
+    sent = _TELEGRAM_BOT.send_message(request.message)
+    return {
+        "ok": sent,
+        "telegram": _check_telegram(),
+    }
+
+
+@app.post("/api/v1/run", response_model=RunResponse, tags=["pipeline"], summary="Run the pipeline synchronously")
 def run_pipeline(
     request: RunRequest,
     user: dict[str, Any] = Depends(require_auth),
 ) -> RunResponse:
     _ = user
+    api_run_id = f"api-run-sync-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}"
+    _set_run_state(api_run_id, status_value="running", message="Pipeline started.", payload={})
     try:
         outcome = execute_pipeline(
-                goal=request.goal,
-                config_only=request.config_only,
-                dry_run=request.dry_run,
-                easy_apply_only=request.easy_apply_only,
-                max_scraped_jobs=request.max_scraped_jobs,
-                max_scoring_jobs=request.max_scoring_jobs,
-                max_applications=request.max_applications,
-                submission_target_successes=request.submission_target_successes,
-                max_approved_candidates=request.max_approved_candidates,
-                linkedin_email=request.linkedin_email,
-                linkedin_password=request.linkedin_password,
-                resume_file_name=request.resume_file_name,
-                resume_file_b64=request.resume_file_b64,
-                work_mode_preference=request.work_mode_preference,
-                progress_callback=lambda progress: _update_run_progress(run_id, progress),
-            )
+            goal=request.goal,
+            config_only=request.config_only,
+            dry_run=request.dry_run,
+            easy_apply_only=request.easy_apply_only,
+            max_scraped_jobs=request.max_scraped_jobs,
+            max_scoring_jobs=request.max_scoring_jobs,
+            max_applications=request.max_applications,
+            submission_target_successes=request.submission_target_successes,
+            max_approved_candidates=request.max_approved_candidates,
+            linkedin_email=request.linkedin_email,
+            linkedin_password=request.linkedin_password,
+            resume_file_name=request.resume_file_name,
+            resume_file_b64=request.resume_file_b64,
+            work_mode_preference=request.work_mode_preference,
+            progress_callback=lambda progress: _update_run_progress(api_run_id, progress),
+        )
+        _set_run_state(api_run_id, status_value=outcome["status"], message=outcome["message"], payload=outcome["payload"])
+        _safe_notify_run_finished(api_run_id, status=outcome["status"], message=outcome["message"], payload=outcome.get("payload") or {})
         return RunResponse(**outcome)
     except Exception as e:
+        _set_run_state(api_run_id, status_value="failed", message=str(e), payload={})
+        _safe_notify_run_finished(api_run_id, status="failed", message=str(e), payload={})
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/v1/run/async", response_model=AsyncRunResponse)
+@app.post("/api/v1/run/async", response_model=AsyncRunResponse, tags=["pipeline"], summary="Start the pipeline asynchronously")
 def run_pipeline_async(
     request: RunRequest,
     user: dict[str, Any] = Depends(require_auth),
 ) -> AsyncRunResponse:
     _ = user
     run_id = f"api-run-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}"
-    with _RUNS_LOCK:
-        _RUNS[run_id] = {
-            "run_id": run_id,
-            "status": "running",
-            "message": "Pipeline started.",
-            "payload": {},
-        }
+    _set_run_state(run_id, status_value="running", message="Pipeline started.", payload={})
 
     def _worker() -> None:
         try:
@@ -445,29 +600,20 @@ def run_pipeline_async(
                 resume_file_name=request.resume_file_name,
                 resume_file_b64=request.resume_file_b64,
                 work_mode_preference=request.work_mode_preference,
+                progress_callback=lambda progress: _update_run_progress(run_id, progress),
             )
-            with _RUNS_LOCK:
-                _RUNS[run_id] = {
-                    "run_id": run_id,
-                    "status": outcome["status"],
-                    "message": outcome["message"],
-                    "payload": outcome["payload"],
-                }
+            _set_run_state(run_id, status_value=outcome["status"], message=outcome["message"], payload=outcome["payload"])
+            _safe_notify_run_finished(run_id, status=outcome["status"], message=outcome["message"], payload=outcome.get("payload") or {})
         except Exception as e:
-            with _RUNS_LOCK:
-                _RUNS[run_id] = {
-                    "run_id": run_id,
-                    "status": "failed",
-                    "message": str(e),
-                    "payload": {},
-                }
+            _set_run_state(run_id, status_value="failed", message=str(e), payload={})
+            _safe_notify_run_finished(run_id, status="failed", message=str(e), payload={})
 
     thread = threading.Thread(target=_worker, daemon=True)
     thread.start()
     return AsyncRunResponse(run_id=run_id, status="running")
 
 
-@app.get("/api/v1/run/{run_id}", response_model=RunResponse)
+@app.get("/api/v1/run/{run_id}", response_model=RunResponse, tags=["pipeline"], summary="Get status for a pipeline run")
 def get_run(
     run_id: str,
     user: dict[str, Any] = Depends(require_auth),

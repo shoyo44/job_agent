@@ -17,6 +17,11 @@ from main import run_scrapers
 from tools.agent_jsonl import append_jsonl
 from tools.cover_letter import CoverLetterAgent
 from tools.resume_tools import extract_skills, summarise_resume
+from tools.submission_tools import (
+    build_submission_plan,
+    ensure_runtime_browser_profile,
+    format_submission_log,
+)
 
 
 def _emit_progress(
@@ -116,6 +121,77 @@ def _build_agent_flow(
     ]
 
 
+def _build_pipeline_payload(
+    *,
+    profile: Any,
+    linkedin_email: str,
+    runtime_resume_path: Path | None,
+    resume_file_name: str,
+    context_path: Path,
+    raw_jobs: list[JobListing] | None = None,
+    scored_jobs: list[JobListing] | None = None,
+    approved_jobs: list[JobListing] | None = None,
+    cover_letters: dict[str, str] | None = None,
+    results: list[ApplicationResult] | None = None,
+    tracking_backend: str | None = None,
+) -> dict[str, Any]:
+    raw_jobs = raw_jobs or []
+    scored_jobs = scored_jobs or []
+    approved_jobs = approved_jobs or []
+    cover_letters = cover_letters or {}
+    results = results or []
+    applied_count = sum(1 for item in results if item.result.value in ("Applied", "DryRun"))
+
+    cover_letter_entries = [
+        {
+            "job_id": job.job_id,
+            "title": job.title,
+            "company": job.company,
+            "content": cover_letters[job.job_id],
+        }
+        for job in approved_jobs
+        if job.job_id in cover_letters
+    ]
+
+    return {
+        "profile": {
+            "goal": profile.goal,
+            "roles": profile.roles,
+            "locations": profile.locations,
+            "work_mode": getattr(profile, "work_mode", "any"),
+            "min_salary": getattr(profile, "min_salary", 0),
+            "dry_run": profile.dry_run,
+        },
+        "counts": {
+            "raw_jobs": len(raw_jobs),
+            "scored_jobs": len(scored_jobs),
+            "approved_jobs": len(approved_jobs),
+            "applications_processed": applied_count,
+            "cover_letters_generated": len(cover_letters),
+        },
+        "runtime_inputs": {
+            "linkedin_email_provided": bool(linkedin_email.strip()),
+            "resume_uploaded": runtime_resume_path is not None,
+            "resume_file_name": _safe_resume_filename(resume_file_name) if runtime_resume_path else "",
+        },
+        "approved_jobs": [_job_to_dict(j) for j in approved_jobs],
+        "cover_letters": cover_letter_entries,
+        "agent_flow": _build_agent_flow(
+            profile=profile,
+            raw_jobs=raw_jobs,
+            scored_jobs=scored_jobs,
+            approved_jobs=approved_jobs,
+            cover_letters=cover_letters,
+            results=results,
+            storage_target=tracking_backend,
+        ),
+        "results": [_result_to_dict(r) for r in results],
+        "tracking_backend": tracking_backend or "",
+        "context_path": str(context_path),
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+    }
+
+
 def _safe_resume_filename(name: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9._-]", "_", (name or "resume.pdf").strip())
     if not cleaned:
@@ -160,7 +236,9 @@ def execute_pipeline(
     original_password = config.LINKEDIN_PASSWORD
     original_resume_path = config.USER_RESUME_PATH
     original_use_temp_browser_profile = config.USE_TEMP_BROWSER_PROFILE
+    original_runtime_browser_profile_dir = getattr(config, "RUNTIME_BROWSER_PROFILE_DIR", "")
     runtime_resume_path: Path | None = None
+    runtime_browser_profile_dir: Path | None = None
 
     run_config = RunConfig.build(
         dry_run_override=dry_run,
@@ -181,15 +259,16 @@ def execute_pipeline(
             phase="starting",
             message="Preparing runtime inputs and loading the job goal.",
         )
-        use_runtime_linkedin_credentials = bool(
-            linkedin_email.strip() and linkedin_password
-        )
         if linkedin_email.strip():
             config.LINKEDIN_EMAIL = linkedin_email.strip()
         if linkedin_password:
             config.LINKEDIN_PASSWORD = linkedin_password
-        if use_runtime_linkedin_credentials:
-            config.USE_TEMP_BROWSER_PROFILE = True
+        config.USE_TEMP_BROWSER_PROFILE = True
+        runtime_browser_profile_dir = ensure_runtime_browser_profile(
+            base_dir=Path("data") / "runtime_browser_profiles",
+            run_id=run_config.run_id,
+        )
+        config.RUNTIME_BROWSER_PROFILE_DIR = str(runtime_browser_profile_dir)
         if resume_file_b64.strip():
             runtime_resume_path = _materialize_runtime_resume(
                 run_id=run_config.run_id,
@@ -263,31 +342,31 @@ def execute_pipeline(
         )
 
         if not raw_jobs:
+            storage_target = (
+                f"MongoDB: {config.MONGODB_DB}.{config.MONGODB_COLLECTION}"
+                if tracker.use_mongodb
+                else f"Excel: {config.EXCEL_FILE_PATH}"
+            )
             _emit_progress(
-            progress_callback,
-            agent="TrackerAgent",
-            phase="completed",
-            message="Pipeline completed successfully.",
-            extra={"applications_processed": applied_count},
-        )
+                progress_callback,
+                agent="TrackerAgent",
+                phase="completed",
+                message="Pipeline finished before submission because no matching jobs were found.",
+                extra={"applications_processed": 0},
+            )
 
-        return {
+            return {
                 "run_id": run_config.run_id,
                 "status": "no_jobs",
                 "message": "No jobs found from scrapers.",
-                "payload": {
-                    "profile": {
-                        "goal": profile.goal,
-                        "roles": profile.roles,
-                        "locations": profile.locations,
-                        "dry_run": profile.dry_run,
-                    },
-                    "runtime_inputs": {
-                        "linkedin_email_provided": bool(linkedin_email.strip()),
-                        "resume_uploaded": runtime_resume_path is not None,
-                    },
-                    "context_path": str(context_path),
-                },
+                "payload": _build_pipeline_payload(
+                    profile=profile,
+                    linkedin_email=linkedin_email,
+                    runtime_resume_path=runtime_resume_path,
+                    resume_file_name=resume_file_name,
+                    context_path=context_path,
+                    tracking_backend=storage_target,
+                ),
             }
 
         _emit_progress(
@@ -305,23 +384,24 @@ def execute_pipeline(
         )
 
         if not scored_jobs:
+            storage_target = (
+                f"MongoDB: {config.MONGODB_DB}.{config.MONGODB_COLLECTION}"
+                if tracker.use_mongodb
+                else f"Excel: {config.EXCEL_FILE_PATH}"
+            )
             return {
                 "run_id": run_config.run_id,
                 "status": "no_scored_jobs",
                 "message": "No jobs passed scoring/filtering.",
-                "payload": {
-                    "profile": {
-                        "goal": profile.goal,
-                        "roles": profile.roles,
-                        "locations": profile.locations,
-                        "dry_run": profile.dry_run,
-                    },
-                    "runtime_inputs": {
-                        "linkedin_email_provided": bool(linkedin_email.strip()),
-                        "resume_uploaded": runtime_resume_path is not None,
-                    },
-                    "context_path": str(context_path),
-                },
+                "payload": _build_pipeline_payload(
+                    profile=profile,
+                    linkedin_email=linkedin_email,
+                    runtime_resume_path=runtime_resume_path,
+                    resume_file_name=resume_file_name,
+                    context_path=context_path,
+                    raw_jobs=raw_jobs,
+                    tracking_backend=storage_target,
+                ),
             }
 
         _emit_progress(
@@ -333,7 +413,7 @@ def execute_pipeline(
         )
         critic = CriticAgent(run_config=run_config)
         approved_jobs = critic.run(scored_jobs, profile)
-        approved_jobs = approved_jobs[: max(10, run_config.max_approved_candidates)]
+        approved_jobs = approved_jobs[: min(3, max(1, run_config.max_approved_candidates))]
         append_jsonl(
             context_path,
             "approved_jobs",
@@ -341,18 +421,27 @@ def execute_pipeline(
         )
 
         if not approved_jobs:
+            storage_target = (
+                f"MongoDB: {config.MONGODB_DB}.{config.MONGODB_COLLECTION}"
+                if tracker.use_mongodb
+                else f"Excel: {config.EXCEL_FILE_PATH}"
+            )
+            payload = _build_pipeline_payload(
+                profile=profile,
+                linkedin_email=linkedin_email,
+                runtime_resume_path=runtime_resume_path,
+                resume_file_name=resume_file_name,
+                context_path=context_path,
+                raw_jobs=raw_jobs,
+                scored_jobs=scored_jobs,
+                tracking_backend=storage_target,
+            )
+            payload["scored_jobs"] = [_job_to_dict(j) for j in scored_jobs]
             return {
                 "run_id": run_config.run_id,
                 "status": "no_approved_jobs",
                 "message": "Critic did not approve any jobs.",
-                "payload": {
-                    "scored_jobs": [_job_to_dict(j) for j in scored_jobs],
-                    "runtime_inputs": {
-                        "linkedin_email_provided": bool(linkedin_email.strip()),
-                        "resume_uploaded": runtime_resume_path is not None,
-                    },
-                    "context_path": str(context_path),
-                },
+                "payload": payload,
             }
 
         _emit_progress(
@@ -374,9 +463,13 @@ def execute_pipeline(
         if resume_skills:
             resume_text = f"{resume_text}\n\nRelevant skills: {', '.join(resume_skills[:20])}"
 
-        # Hierarchical fallback: keep trying next approved jobs until target successes are reached.
-        submission_target_successes = max(1, submission_target_successes)
-        jobs_to_apply = approved_jobs
+        # Try up to three critic-selected jobs and stop once one application succeeds.
+        submission_target_successes = 1
+        jobs_to_apply = approved_jobs[:3]
+        submission_plan = build_submission_plan(
+            approved_jobs=approved_jobs,
+            submission_target_successes=submission_target_successes,
+        )
         cover_letter_agent = CoverLetterAgent(run_config=run_config)
         cover_letters: dict[str, str] = {}
         for job in jobs_to_apply:
@@ -404,7 +497,7 @@ def execute_pipeline(
             agent="SubmissionAgent",
             phase="applying",
             message="Attempting applications in fallback order until success.",
-            extra={"jobs_to_try": len(jobs_to_apply), "target_successes": submission_target_successes},
+            extra=submission_plan,
         )
         submission_run_config = RunConfig(
             run_id=run_config.run_id,
@@ -415,6 +508,7 @@ def execute_pipeline(
             max_approved_candidates=run_config.max_approved_candidates,
         )
         submission = SubmissionAgent(run_config=submission_run_config)
+        submission.log.info(format_submission_log(submission_plan))
         results = submission.run(
             jobs_to_apply,
             cover_letters,
@@ -439,66 +533,34 @@ def execute_pipeline(
             else f"Excel: {config.EXCEL_FILE_PATH}"
         )
 
-        cover_letter_entries = [
-            {
-                "job_id": job.job_id,
-                "title": job.title,
-                "company": job.company,
-                "content": cover_letters[job.job_id],
-            }
-            for job in jobs_to_apply
-            if job.job_id in cover_letters
-        ]
-        agent_flow = _build_agent_flow(
+        payload = _build_pipeline_payload(
             profile=profile,
+            linkedin_email=linkedin_email,
+            runtime_resume_path=runtime_resume_path,
+            resume_file_name=resume_file_name,
+            context_path=context_path,
             raw_jobs=raw_jobs,
             scored_jobs=scored_jobs,
             approved_jobs=approved_jobs,
             cover_letters=cover_letters,
             results=results,
-            storage_target=storage_target,
+            tracking_backend=storage_target,
         )
+        payload["counts"]["submission_target_successes"] = submission_target_successes
+        payload["submission_plan"] = submission_plan
 
         return {
             "run_id": run_config.run_id,
             "status": "completed",
             "message": "Pipeline run completed.",
-            "payload": {
-                "profile": {
-                    "goal": profile.goal,
-                    "roles": profile.roles,
-                    "locations": profile.locations,
-                    "work_mode": profile.work_mode,
-                    "min_salary": profile.min_salary,
-                    "dry_run": profile.dry_run,
-                },
-                "counts": {
-                    "raw_jobs": len(raw_jobs),
-                    "scored_jobs": len(scored_jobs),
-                    "approved_jobs": len(approved_jobs),
-                    "applications_processed": applied_count,
-                    "submission_target_successes": submission_target_successes,
-                    "cover_letters_generated": len(cover_letters),
-                },
-                "runtime_inputs": {
-                    "linkedin_email_provided": bool(linkedin_email.strip()),
-                    "resume_uploaded": runtime_resume_path is not None,
-                    "resume_file_name": _safe_resume_filename(resume_file_name) if runtime_resume_path else "",
-                },
-                "approved_jobs": [_job_to_dict(j) for j in approved_jobs],
-                "cover_letters": cover_letter_entries,
-                "agent_flow": agent_flow,
-                "results": [_result_to_dict(r) for r in results],
-                "tracking_backend": storage_target,
-                "context_path": str(context_path),
-                "timestamp": datetime.now().isoformat(timespec="seconds"),
-            },
+            "payload": payload,
         }
     finally:
         config.LINKEDIN_EMAIL = original_email
         config.LINKEDIN_PASSWORD = original_password
         config.USER_RESUME_PATH = original_resume_path
         config.USE_TEMP_BROWSER_PROFILE = original_use_temp_browser_profile
+        config.RUNTIME_BROWSER_PROFILE_DIR = original_runtime_browser_profile_dir
         if runtime_resume_path is not None:
             try:
                 runtime_resume_path.unlink(missing_ok=True)

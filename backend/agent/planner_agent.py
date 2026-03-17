@@ -37,7 +37,7 @@ class PlannerAgent(BaseAgent):
 
     def __init__(self, run_config=None):
         super().__init__("PlannerAgent", run_config=run_config)
-        self.top_n_fallback = 3
+        self.top_n_scored = 5
 
     def _query_keywords_for_role(self, role: str, profile: SearchProfile) -> list[str]:
         role_lower = role.lower()
@@ -205,31 +205,21 @@ Return JSON only:
         return job
 
     def filter_jobs(self, jobs: list[JobListing], profile: SearchProfile, applied_ids: set[str]) -> list[JobListing]:
-        filtered = []
+        eligible = []
         for job in jobs:
             if job.job_id in applied_ids:
                 self.log.debug(f"Skip (already applied): {job.job_id}")
                 job.already_applied = True
                 continue
-            if job.confidence_score < profile.min_confidence_score:
-                self.log.debug(f"Skip (low score {job.confidence_score}): {job.title}")
-                continue
-            filtered.append(job)
+            eligible.append(job)
 
-        filtered.sort(key=lambda j: j.confidence_score, reverse=True)
-        if not filtered:
-            eligible = [j for j in jobs if j.job_id not in applied_ids]
-            eligible.sort(key=lambda j: j.confidence_score, reverse=True)
-            fallback = eligible[: self.top_n_fallback]
-            if fallback:
-                self.log.info(
-                    f"No jobs passed threshold {profile.min_confidence_score}; "
-                    f"using top-{len(fallback)} fallback for Critic review."
-                )
-                return fallback
-
-        self.log.info(f"{len(filtered)} jobs passed filter (min score={profile.min_confidence_score}).")
-        return filtered
+        eligible.sort(key=lambda j: j.confidence_score, reverse=True)
+        shortlisted = eligible[: self.top_n_scored]
+        self.log.info(
+            f"Planner shortlisted top-{len(shortlisted)} scored jobs for Critic review "
+            f"(target top={self.top_n_scored}, min score hint={profile.min_confidence_score})."
+        )
+        return shortlisted
 
     def run(self, profile: SearchProfile, raw_jobs: list[JobListing], applied_ids: set[str]) -> list[JobListing]:
         self.log.info(f"Planner received {len(raw_jobs)} raw job listings to score.")

@@ -27,3 +27,6 @@ fastapi>=0.115.0
 uvicorn>=0.30.0
 
 firebase-admin>=6.5.0
+
+# Telegram
+python-telegram-bot>=21.0

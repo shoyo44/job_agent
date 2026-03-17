@@ -43,3 +43,22 @@ class FirebaseUserResponse(BaseModel):
     picture: str = ""
 
 
+class TelegramTestRequest(BaseModel):
+    message: str = Field(default="Job Agent backend Telegram test message.")
+
+
+class TrackerStatusUpdateRequest(BaseModel):
+    job_id: str
+    new_status: str
+    notes: str = ""
+
+
+class FeatureResponse(BaseModel):
+    service: str
+    features: dict[str, Any] = Field(default_factory=dict)
+
+
+class DocsSummaryResponse(BaseModel):
+    service: str
+    version: str
+    sections: dict[str, Any] = Field(default_factory=dict)

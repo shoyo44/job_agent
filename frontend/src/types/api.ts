@@ -90,4 +90,23 @@ export type AsyncRunResponse = {
   status: string
 }
 
+export type FeatureResponse = {
+  service: string
+  features: Record<string, Record<string, string>>
+}
+
+export type DocsSummaryResponse = {
+  service: string
+  version: string
+  sections: Record<string, {
+    required?: boolean
+    flow?: string[]
+    entrypoints?: string[]
+    outputs?: string[]
+    read?: string[]
+    write?: string[]
+    readiness?: string[]
+    notes?: string[]
+  }>
+}
 

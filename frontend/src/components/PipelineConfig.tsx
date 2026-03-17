@@ -47,7 +47,7 @@ export const PipelineForm: React.FC<PipelineFormProps> = ({
       <div className="run-action-bar">
         <div>
           <p className="strong">Ready to start?</p>
-          <p className="muted small">Use this button to run the full pipeline with the settings below.</p>
+          <p className="muted small">Use this button to run the same backend flow: score top 5, critic picks top 3, submission stops after 1 success.</p>
         </div>
         <button className="primary run-button" onClick={onRunSync} disabled={loading || runStatus === 'running'}>
           {loading ? 'Starting...' : runStatus === 'running' ? 'Pipeline Running' : 'Start Pipeline'}
@@ -117,7 +117,7 @@ export const PipelineForm: React.FC<PipelineFormProps> = ({
 
       <div className="setup-note">
         <p className="muted">
-          The agent will scrape matching jobs, rank them, generate resume-aware cover letters, and try the best jobs in fallback order until one submission succeeds.
+          The frontend now mirrors the backend workflow: scrape matching jobs, score and keep the top 5, let the critic select the top 3, generate cover letters for those finalists, and stop after the first successful submission.
         </p>
       </div>
     </article>

@@ -1,5 +1,6 @@
 import React from "react";
 import type { RunResponse } from "../types/api";
+import { deriveAgentFlow, describeRunOutcome } from "../utils/runWorkflow";
 
 interface ExecutionOutputProps {
   latestRun: RunResponse | null;
@@ -23,6 +24,8 @@ export const ExecutionOutput: React.FC<ExecutionOutputProps> = ({ latestRun }) =
   const results = (payload.results as RunResult[] | undefined) ?? [];
   const counts = (payload.counts as Record<string, number> | undefined) ?? {};
   const coverLetters = (payload.cover_letters as CoverLetterEntry[] | undefined) ?? [];
+  const agentFlow = deriveAgentFlow(latestRun);
+  const runOutcome = describeRunOutcome(latestRun);
 
   return (
     <div className="results-layout">
@@ -36,18 +39,43 @@ export const ExecutionOutput: React.FC<ExecutionOutputProps> = ({ latestRun }) =
         </header>
 
         {latestRun ? (
-          <div className="results-hero-grid">
-            <div className="story-stat"><span>Run ID</span><strong>{latestRun.run_id}</strong></div>
-            <div className="story-stat"><span>Scraped</span><strong>{counts.raw_jobs ?? 0}</strong></div>
-            <div className="story-stat"><span>Approved</span><strong>{counts.approved_jobs ?? 0}</strong></div>
-            <div className="story-stat"><span>Cover Letters</span><strong>{counts.cover_letters_generated ?? coverLetters.length}</strong></div>
-          </div>
+          <>
+            <div className="results-hero-grid">
+              <div className="story-stat"><span>Run ID</span><strong>{latestRun.run_id}</strong></div>
+              <div className="story-stat"><span>Scraped</span><strong>{counts.raw_jobs ?? 0}</strong></div>
+              <div className="story-stat"><span>Approved</span><strong>{counts.approved_jobs ?? 0}</strong></div>
+              <div className="story-stat"><span>Cover Letters</span><strong>{counts.cover_letters_generated ?? coverLetters.length}</strong></div>
+            </div>
+            <p className="muted" style={{ marginTop: "1rem" }}>{runOutcome}</p>
+          </>
         ) : (
           <div className="empty-story">
             <p className="strong">No run output yet</p>
             <p className="muted">Start a sync or async run to see the fallback attempts and generated writing here.</p>
           </div>
         )}
+      </article>
+
+      <article className="panel">
+        <header className="panel-header">
+          <div>
+            <p className="eyebrow">Workflow Mirror</p>
+            <h2>Frontend view of the backend agent path</h2>
+          </div>
+        </header>
+        <div className="agent-flow">
+          {agentFlow.map((step, index) => (
+            <div key={`${step.agent}-${index}`} className={`agent-card agent-${step.status || "ready"}`}>
+              <div className="agent-card-top">
+                <span className="agent-index">{String(index + 1).padStart(2, "0")}</span>
+                <span className="badge">{step.status || "ready"}</span>
+              </div>
+              <h3>{step.agent || "Agent"}</h3>
+              <p className="strong">{step.title || "Working"}</p>
+              <p className="muted">{step.summary || "Waiting for backend details."}</p>
+            </div>
+          ))}
+        </div>
       </article>
 
       <article className="panel">

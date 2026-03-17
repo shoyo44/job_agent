@@ -186,7 +186,11 @@ class LinkedInPlaywrightScraper:
     # Browser lifecycle
     # ------------------------------------------------------------------
     def _prepare_user_data_dir(self, force_temp_profile: bool = False) -> str:
-        if force_temp_profile or config.USE_TEMP_BROWSER_PROFILE:
+        if config.RUNTIME_BROWSER_PROFILE_DIR:
+            user_data_dir = config.RUNTIME_BROWSER_PROFILE_DIR
+            os.makedirs(user_data_dir, exist_ok=True)
+            self.log.info(f"Using shared runtime browser profile: {user_data_dir}")
+        elif force_temp_profile or config.USE_TEMP_BROWSER_PROFILE:
             if not self._temp_profile_dir:
                 self._temp_profile_dir = tempfile.mkdtemp(prefix="job-agent-chromium-")
             user_data_dir = self._temp_profile_dir

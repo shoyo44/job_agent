@@ -1,17 +1,19 @@
-import type { RunResponse, TrackerHistoryResponse, TrackerStatsResponse } from "../types/api";
+import type {
+  DocsSummaryResponse,
+  FeatureResponse,
+  RunResponse,
+  TrackerHistoryResponse,
+  TrackerStatsResponse,
+} from "../types/api";
+import { deriveAgentFlow, describeRunOutcome } from "../utils/runWorkflow";
 
 interface OverviewPanelProps {
   latestRun: RunResponse | null;
   tracker: TrackerStatsResponse | null;
   trackerHistory: TrackerHistoryResponse | null;
+  apiFeatures: FeatureResponse | null;
+  docsSummary: DocsSummaryResponse | null;
 }
-
-type AgentStep = {
-  agent?: string;
-  title?: string;
-  status?: string;
-  summary?: string;
-};
 
 type JobSummary = {
   title?: string;
@@ -20,24 +22,18 @@ type JobSummary = {
   work_mode?: string;
 };
 
-const fallbackSteps: AgentStep[] = [
-  { agent: "ManagerAgent", title: "Interprets the goal", status: "ready", summary: "Turns the job request into a search profile with roles, locations, and preferences." },
-  { agent: "PlannerAgent", title: "Finds and scores jobs", status: "ready", summary: "Builds search queries, scrapes LinkedIn jobs, and ranks them by fit." },
-  { agent: "CriticAgent", title: "Filters quality", status: "ready", summary: "Rejects weaker matches and keeps the strongest jobs for submission." },
-  { agent: "CoverLetterAgent", title: "Writes tailored pitch", status: "ready", summary: "Generates a resume-aware cover letter for each approved job." },
-  { agent: "SubmissionAgent", title: "Executes fallback apply flow", status: "ready", summary: "Tries jobs one by one until one Easy Apply submission succeeds." },
-  { agent: "TrackerAgent", title: "Stores outcomes", status: "ready", summary: "Saves the run result so the next session knows what already happened." },
-];
-
-export const OverviewPanel: React.FC<OverviewPanelProps> = ({ latestRun, tracker, trackerHistory }) => {
+export const OverviewPanel: React.FC<OverviewPanelProps> = ({ latestRun, tracker, trackerHistory, apiFeatures, docsSummary }) => {
   const payload = (latestRun?.payload as Record<string, any> | undefined) ?? {};
   const counts = (payload.counts as Record<string, number> | undefined) ?? {};
   const profile = (payload.profile as Record<string, any> | undefined) ?? {};
-  const agentFlow = ((payload.agent_flow as AgentStep[] | undefined) ?? fallbackSteps);
+  const agentFlow = deriveAgentFlow(latestRun);
   const approvedJobs = ((payload.approved_jobs as JobSummary[] | undefined) ?? []).slice(0, 4);
   const historyRecords = trackerHistory?.records ?? [];
   const backend = trackerHistory?.backend;
   const currentProgress = ((latestRun?.payload as Record<string, any> | undefined)?.current_progress as Record<string, any> | undefined) ?? null;
+  const featureGroups = Object.entries(apiFeatures?.features ?? {});
+  const docsSections = Object.entries(docsSummary?.sections ?? {});
+  const runOutcome = describeRunOutcome(latestRun);
 
   return (
     <div className="pipeline-overview">
@@ -65,8 +61,8 @@ export const OverviewPanel: React.FC<OverviewPanelProps> = ({ latestRun, tracker
             <strong>{String(tracker?.applied_today ?? 0)}</strong>
           </div>
         </div>
+        <p className="muted" style={{ marginTop: "1rem" }}>{runOutcome}</p>
       </article>
-
 
       <article className="panel current-progress-panel">
         <header className="panel-header">
@@ -177,6 +173,68 @@ export const OverviewPanel: React.FC<OverviewPanelProps> = ({ latestRun, tracker
               <strong>{backend?.collection || "N/A"}</strong>
             </div>
           </div>
+        </article>
+      </div>
+
+      <div className="content-grid capability-grid">
+        <article className="panel">
+          <header className="panel-header">
+            <div>
+              <p className="eyebrow">FastAPI Features</p>
+              <h2>What the backend exposes today</h2>
+            </div>
+          </header>
+          {featureGroups.length ? (
+            <div className="capability-list">
+              {featureGroups.map(([group, items]) => (
+                <div key={group} className="capability-card">
+                  <p className="strong capability-title">{group}</p>
+                  {Object.entries(items).map(([label, route]) => (
+                    <div key={label} className="capability-row">
+                      <span>{label}</span>
+                      <code>{route}</code>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-story">
+              <p className="strong">API feature map unavailable</p>
+              <p className="muted">The frontend will show backend capability groups after authenticated API discovery loads.</p>
+            </div>
+          )}
+        </article>
+
+        <article className="panel">
+          <header className="panel-header">
+            <div>
+              <p className="eyebrow">Backend Docs Summary</p>
+              <h2>Frontend-ready capability notes</h2>
+            </div>
+          </header>
+          {docsSections.length ? (
+            <div className="capability-list">
+              {docsSections.map(([section, details]) => {
+                const lists = [details.flow, details.entrypoints, details.outputs, details.read, details.write, details.readiness, details.notes].filter(Boolean) as string[][];
+                return (
+                  <div key={section} className="capability-card">
+                    <p className="strong capability-title">{section}</p>
+                    {lists.flat().slice(0, 8).map((item) => (
+                      <div key={item} className="capability-row">
+                        <span>{item}</span>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="empty-story">
+              <p className="strong">Docs summary unavailable</p>
+              <p className="muted">This area will mirror the grouped backend capability summary from FastAPI.</p>
+            </div>
+          )}
         </article>
       </div>
 

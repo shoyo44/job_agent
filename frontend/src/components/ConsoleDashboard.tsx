@@ -6,10 +6,14 @@ import {
   verifyFirebaseToken,
   getTrackerStats,
   getTrackerHistory,
+  getFeatures,
+  getDocsSummary,
   runAsync,
   getRun,
 } from '../services/api'
 import type {
+  DocsSummaryResponse,
+  FeatureResponse,
   RunRequest,
   RunResponse,
   TrackerStatsResponse,
@@ -45,6 +49,8 @@ export function ConsoleDashboard() {
   const [token, setToken] = useState('')
   const [tracker, setTracker] = useState<TrackerStatsResponse | null>(null)
   const [trackerHistory, setTrackerHistory] = useState<TrackerHistoryResponse | null>(null)
+  const [apiFeatures, setApiFeatures] = useState<FeatureResponse | null>(null)
+  const [docsSummary, setDocsSummary] = useState<DocsSummaryResponse | null>(null)
   const [syncRun, setSyncRun] = useState<RunResponse | null>(null)
   const [activeRunId, setActiveRunId] = useState('')
 
@@ -89,6 +95,13 @@ export function ConsoleDashboard() {
     return () => window.clearInterval(timer)
   }, [activeRunId, syncRun?.status, token])
 
+  useEffect(() => {
+    if (!token || !onboardingComplete) {
+      return
+    }
+    loadPrivate()
+  }, [token, onboardingComplete])
+
   const checklist = [
     { label: 'Google session connected', done: isAuthed },
     { label: 'Resume and LinkedIn added', done: onboardingComplete },
@@ -100,6 +113,10 @@ export function ConsoleDashboard() {
   function buildRunBody(): RunRequest {
     return {
       ...form,
+      max_scoring_jobs: 5,
+      max_approved_candidates: 3,
+      max_applications: 1,
+      submission_target_successes: 1,
       linkedin_email: linkedinEmail.trim(),
       linkedin_password: linkedinPassword,
       resume_file_name: resumeFileName,
@@ -158,7 +175,7 @@ export function ConsoleDashboard() {
     setLoading(true)
     try {
       if (auth) await signOut(auth)
-      setFirebaseUser(null); setToken(''); setTracker(null); setTrackerHistory(null);
+      setFirebaseUser(null); setToken(''); setTracker(null); setTrackerHistory(null); setApiFeatures(null); setDocsSummary(null);
       setSyncRun(null);
       setActiveRunId('');
       setLinkedinEmail(''); setLinkedinPassword(''); setResumeFileName(''); setResumeFileB64('');
@@ -172,12 +189,16 @@ export function ConsoleDashboard() {
   async function loadPrivate() {
     if (!isAuthed || !onboardingComplete) return
     try {
-      const [trackerData, historyData] = await Promise.all([
+      const [trackerData, historyData, featuresData, docsData] = await Promise.all([
         getTrackerStats(token),
         getTrackerHistory(token),
+        getFeatures(token),
+        getDocsSummary(token),
       ])
       setTracker(trackerData)
       setTrackerHistory(historyData)
+      setApiFeatures(featuresData)
+      setDocsSummary(docsData)
     } catch (e) { setMessage(`Private load failed: ${String(e)}`) }
   }
 
@@ -226,7 +247,7 @@ export function ConsoleDashboard() {
       firebaseUser={firebaseUser} onLogout={onLogout}
       loading={loading} message={message} checklist={checklist}
     >
-      {activeTab === 'overview' && <OverviewPanel latestRun={latestRun} tracker={tracker} trackerHistory={trackerHistory} />}
+      {activeTab === 'overview' && <OverviewPanel latestRun={latestRun} tracker={tracker} trackerHistory={trackerHistory} apiFeatures={apiFeatures} docsSummary={docsSummary} />}
       {activeTab === 'pipeline' && (
         <PipelineForm 
           form={form} setField={setField} loading={loading}

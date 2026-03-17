@@ -28,6 +28,7 @@ class CriticAgent(BaseAgent):
 
     def __init__(self, run_config=None):
         super().__init__("CriticAgent", run_config=run_config)
+        self.max_finalists = 3
 
     def review_job(self, job: JobListing, profile: SearchProfile) -> CriticDecision:
         prompt = f"""
@@ -93,10 +94,13 @@ Return JSON only:
 
         approved_jobs = [d.job for d in decisions if d.approved]
 
+        decisions.sort(key=lambda d: d.adjusted_score, reverse=True)
         if not approved_jobs and decisions:
-            self.log.info("No jobs approved by Critic. Falling back to highest scored job.")
-            decisions.sort(key=lambda d: d.adjusted_score, reverse=True)
-            approved_jobs.append(decisions[0].job)
+            self.log.info("No jobs approved by Critic. Falling back to highest scored jobs.")
+            approved_jobs = [d.job for d in decisions[: self.max_finalists]]
+        else:
+            approved_jobs.sort(key=lambda job: job.confidence_score, reverse=True)
+            approved_jobs = approved_jobs[: self.max_finalists]
 
-        self.log.info(f"Critic approved {len(approved_jobs)}/{len(jobs)} jobs.")
+        self.log.info(f"Critic selected {len(approved_jobs)}/{len(jobs)} jobs for submission.")
         return approved_jobs

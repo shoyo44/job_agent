@@ -38,6 +38,7 @@ from agent.submission.selectors import (
 )
 from tools.cover_letter import CoverLetterAgent
 from tools.resume_tools import extract_text_from_pdf
+from tools.submission_tools import format_submission_log
 
 
 def _assert_playwright_start_supported() -> None:
@@ -104,7 +105,11 @@ class SubmissionAgent(BaseAgent):
         _assert_playwright_start_supported()
         self._playwright = sync_playwright().start()
 
-        if config.USE_TEMP_BROWSER_PROFILE:
+        if config.RUNTIME_BROWSER_PROFILE_DIR:
+            user_data_dir = Path(config.RUNTIME_BROWSER_PROFILE_DIR)
+            user_data_dir.mkdir(parents=True, exist_ok=True)
+            self.log.info(f"Using shared runtime browser profile: {user_data_dir}")
+        elif config.USE_TEMP_BROWSER_PROFILE:
             self._temp_profile_dir = Path(tempfile.mkdtemp(prefix="job-agent-submit-"))
             user_data_dir = self._temp_profile_dir
             self.log.info(f"Using temporary browser profile: {user_data_dir}")
@@ -149,6 +154,134 @@ class SubmissionAgent(BaseAgent):
                 pass
             self._temp_profile_dir = None
         self.log.info("Browser stopped.")
+
+    def _linkedin_session_active(self, page: Page) -> bool:
+        try:
+            url = page.url or ""
+            if any(token in url for token in ["/feed", "/mynetwork", "/jobs/"]):
+                nav = page.locator("nav[aria-label='Global'], .global-nav").first
+                if nav.count() > 0 and nav.is_visible():
+                    return True
+            sign_in = page.locator("button:has-text('Sign in'), a:has-text('Sign in')").first
+            if sign_in.count() > 0 and sign_in.is_visible():
+                return False
+            nav = page.locator("nav[aria-label='Global'], .global-nav").first
+            return nav.count() > 0 and nav.is_visible()
+        except Exception:
+            return False
+
+
+    def _canonical_linkedin_job_urls(self, job_url: str) -> list[str]:
+        urls: list[str] = []
+        cleaned = (job_url or "").strip()
+        if cleaned:
+            urls.append(cleaned)
+        if "/jobs/view/" in cleaned:
+            canonical = cleaned.split("?", 1)[0].rstrip("/")
+            if canonical:
+                urls.append(canonical)
+        deduped: list[str] = []
+        for url in urls:
+            if url and url not in deduped:
+                deduped.append(url)
+        return deduped
+
+    def _looks_like_linkedin_job_page(self, page: Page) -> bool:
+        try:
+            url = page.url or ""
+            if "/jobs/view/" not in url:
+                return False
+            if any(token in url for token in ["/login", "/checkpoint", "/authwall"]):
+                return False
+            sign_in = page.locator("button:has-text('Sign in'), a:has-text('Sign in')").first
+            if sign_in.count() > 0 and sign_in.is_visible():
+                return False
+            if self._is_already_applied(page):
+                return True
+            apply_kind, apply_button = self._get_apply_button(page)
+            if apply_kind != "none" and apply_button is not None:
+                return True
+            top_card = page.locator(
+                ".jobs-unified-top-card, .job-details-jobs-unified-top-card__container--two-pane, main"
+            ).first
+            return top_card.count() > 0 and top_card.is_visible()
+        except Exception:
+            return False
+
+    def _open_linkedin_job_page(self, page: Page, job: JobListing) -> bool:
+        for target_url in self._canonical_linkedin_job_urls(job.url):
+            try:
+                page.goto(target_url, wait_until="domcontentloaded", timeout=40_000)
+            except Exception:
+                continue
+            self.human_pause(1.5)
+            if self._looks_like_linkedin_job_page(page):
+                return True
+        return False
+
+    def _login_linkedin(self, page: Page, target_url: str = "") -> bool:
+        if self._linkedin_session_active(page):
+            self.log.info("SubmissionAgent found an active LinkedIn session.")
+            return True
+        if not config.LINKEDIN_EMAIL or not config.LINKEDIN_PASSWORD:
+            self.log.warning("LinkedIn credentials are missing for SubmissionAgent login.")
+            return False
+
+        self.log.info("SubmissionAgent is logging into LinkedIn before applying.")
+        page.goto("https://www.linkedin.com/login", wait_until="domcontentloaded", timeout=30_000)
+        self.human_pause(1.5)
+
+        email_selector = "#username" if page.locator("#username").count() > 0 else "#session_key"
+        password_selector = "#password" if page.locator("#password").count() > 0 else "#session_password"
+        if page.locator(email_selector).count() == 0 or page.locator(password_selector).count() == 0:
+            self.log.warning("SubmissionAgent could not find LinkedIn login fields.")
+            return False
+
+        page.click(email_selector)
+        self.human_pause(0.3)
+        page.fill(email_selector, config.LINKEDIN_EMAIL)
+        self.human_pause(0.3)
+        page.click(password_selector)
+        self.human_pause(0.3)
+        page.fill(password_selector, config.LINKEDIN_PASSWORD)
+        self.human_pause(0.3)
+        page.click("button[type='submit']")
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=20_000)
+        except Exception:
+            pass
+        self.human_pause(2.0)
+
+        active = self._linkedin_session_active(page)
+        if active:
+            self.log.info("SubmissionAgent LinkedIn login successful.")
+            if target_url:
+                try:
+                    page.goto(target_url, wait_until="domcontentloaded", timeout=40_000)
+                    self.human_pause(1.5)
+                except Exception as exc:
+                    self.log.warning(f"SubmissionAgent could not reopen target job after login: {exc}")
+        else:
+            self.log.warning("SubmissionAgent LinkedIn login did not produce an active session.")
+        return active
+
+    def _ensure_linkedin_session(self, page: Page, job: JobListing) -> bool:
+        if self._open_linkedin_job_page(page, job):
+            return True
+        if not self._linkedin_session_active(page):
+            if not self._login_linkedin(page, target_url=job.url):
+                self._last_result_notes = (
+                    f"LinkedIn session was not active before applying to {job.title}. "
+                    "SubmissionAgent could not log in again."
+                )
+                return False
+        if self._open_linkedin_job_page(page, job):
+            return True
+        self._last_result_notes = (
+            f"LinkedIn redirected away from the target job page for {job.title}. "
+            "SubmissionAgent could not recover a real jobs/view page with an apply button."
+        )
+        return False
 
     def _get_easy_apply_modal(self, page: Page) -> Locator | None:
         """Return the visible Easy Apply dialog if one is open."""
@@ -1683,11 +1816,26 @@ Return only the answer text.
     ) -> SubmitResult:
         """Attempt only a simple one-step Easy Apply flow."""
         self._last_result_notes = ""
+        if not self._ensure_linkedin_session(page, job):
+            self.log.warning(f"Skipping {job.title} because LinkedIn session could not be restored.")
+            return SubmitResult.SKIPPED
+
         self.log.info(f"Opening LinkedIn job: {job.url}")
-        try:
-            page.goto(job.url, wait_until="networkidle", timeout=45_000)
-        except Exception:
-            page.goto(job.url, wait_until="domcontentloaded", timeout=40_000)
+        if not self._open_linkedin_job_page(page, job):
+            if not self._linkedin_session_active(page):
+                if not self._login_linkedin(page, target_url=job.url):
+                    self.log.warning(f"LinkedIn sign-in wall blocked apply flow for: {job.title}")
+                    self._last_result_notes = "LinkedIn sign-in wall blocked the apply flow."
+                    return SubmitResult.SKIPPED
+            if not self._open_linkedin_job_page(page, job):
+                self.log.warning(
+                    f"LinkedIn opened a non-job page for: {job.title} (page: {page.url[:120]})"
+                )
+                self._last_result_notes = (
+                    "LinkedIn redirected away from the target job page after login. "
+                    "SubmissionAgent could not recover the real jobs/view page."
+                )
+                return SubmitResult.SKIPPED
         self.human_pause(2.0)
 
         page.mouse.wheel(0, 400)
@@ -1839,6 +1987,21 @@ Return only the answer text.
     ) -> list[ApplicationResult]:
         """Apply to approved jobs, skipping duplicates and unsupported flows."""
         results = []
+        self.log.info(
+            format_submission_log(
+                {
+                    "target_successes": self.max_applications,
+                    "jobs_to_try": len(jobs),
+                    "finalists": [
+                        {
+                            "title": job.title,
+                            "company": job.company,
+                        }
+                        for job in jobs
+                    ],
+                }
+            )
+        )
         context = self.start_browser()
         known_applied_ids = set(applied_ids or set())
         attempted_job_ids: set[str] = set()

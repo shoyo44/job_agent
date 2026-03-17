@@ -1,6 +1,8 @@
 import type {
   AsyncRunResponse,
   ConfigResponse,
+  DocsSummaryResponse,
+  FeatureResponse,
   HealthResponse,
   MeResponse,
   RunRequest,
@@ -100,4 +102,18 @@ export async function getRun(token: string, runId: string) {
     headers: { Authorization: `Bearer ${token}` },
   })
   return readJson<RunResponse>(resp)
+}
+
+export async function getFeatures(token: string) {
+  const resp = await fetch(`${API_BASE}/api/v1/features`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return readJson<FeatureResponse>(resp)
+}
+
+export async function getDocsSummary(token: string) {
+  const resp = await fetch(`${API_BASE}/api/v1/docs-summary`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return readJson<DocsSummaryResponse>(resp)
 }
