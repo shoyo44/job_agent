@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+pytest-cache-files-*/
+data/pytest-cache-files-*/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Secrets
+.env
+
+# Runtime artifacts
+data/*.log
+data/debug/
+data/*.png
+data/*.jsonl
+data/*.xlsx
+data/*.xls
+data/*.csv
+
+# Browser profiles/caches
+chromium/user_data/
+AUTO_APPLY/data/chromium_data/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

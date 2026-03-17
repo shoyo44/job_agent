@@ -1,0 +1,29 @@
+# Core
+python-dotenv>=1.0.0
+requests>=2.31.0
+openpyxl>=3.1.2
+pymongo>=4.16.0
+
+# Browser automation
+playwright>=1.42.0
+
+# PDF parsing
+pymupdf>=1.24.0
+
+# Optional: for selenium-based scrapers (already in web_scrapping/ folder)
+selenium>=4.18.0
+webdriver-manager>=4.0.1
+undetected-chromedriver>=3.5.5
+
+# Optional: for BeautifulSoup scrapers
+beautifulsoup4>=4.12.3
+lxml>=5.1.0
+
+# Testing
+pytest>=8.2.0
+
+# API
+fastapi>=0.115.0
+uvicorn>=0.30.0
+
+firebase-admin>=6.5.0
