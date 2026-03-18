@@ -38,6 +38,9 @@ APPLY_BUTTON_SELECTORS = {
         "button:has-text('Easy Apply')",
         "button[aria-label*='Easy Apply']",
         ".jobs-apply-button:has-text('Easy Apply')",
+        ".jobs-apply-button--top-card:has-text('Easy Apply')",
+        "div.jobs-apply-button--top-card button",
+        "[role='button']:has-text('Easy Apply')",
     ],
     "external": [
         "button:has-text('Apply')",
@@ -51,6 +54,9 @@ SUBMISSION_CONFIRMATION_SELECTORS = [
     "h2:has-text('Application submitted')",
     "h2:has-text('application was sent')",
     "span:has-text('Application submitted')",
+    "section:has-text('Application status'):has-text('Application submitted')",
+    "div:has-text('Application status'):has-text('Application submitted')",
+    "text='Application submitted'",
     "[data-test-modal]:has-text('submitted')",
     ".jobs-s-apply--posted",
     "text='Thank you for applying'",
@@ -64,6 +70,7 @@ APPLIED_STATE_SELECTORS = [
     "div.jobs-apply-button--top-card:has-text('Applied')",
     ".jobs-s-apply--posted",
     "button:has-text('Applied')",
+    "section:has-text('Application status')",
 ]
 
 VALIDATION_ERROR_SELECTORS = [

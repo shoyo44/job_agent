@@ -31,7 +31,12 @@ def attempt_action_with_repair(
     except Exception:
         pass
 
-    action_button.click()
+    if hasattr(agent, "_safe_click"):
+        clicked = agent._safe_click(action_button, f"{action_type} action button")
+        if not clicked:
+            return False, ["Could not click action button"]
+    else:
+        action_button.click()
     agent.human_pause(1.2)
 
     errors = agent._collect_visible_errors(form_scope)
@@ -68,7 +73,10 @@ def attempt_action_with_repair(
 
     try:
         if retry_button and retry_button.count() > 0 and retry_button.is_visible():
-            retry_button.click()
+            if hasattr(agent, "_safe_click"):
+                agent._safe_click(retry_button, f"retry {action_type} action button")
+            else:
+                retry_button.click()
             agent.human_pause(1.2)
     except Exception:
         pass

@@ -166,6 +166,45 @@ export const ExecutionOutput: React.FC<ExecutionOutputProps> = ({ latestRun }) =
       <article className="panel">
         <header className="panel-header">
           <div>
+            <p className="eyebrow">Successful Applications</p>
+            <h2>Applied jobs with company details</h2>
+          </div>
+        </header>
+        {successfulResults.length ? (
+          <div className="attempt-ladder">
+            {successfulResults.map((res, idx) => (
+              <div key={`${res.job?.job_id || res.job?.title}-${idx}`} className="attempt-card">
+                <div className="attempt-rank">{idx + 1}</div>
+                <div className="attempt-main">
+                  <p className="strong">{res.job?.title || "Untitled role"}</p>
+                  <p className="muted">{res.job?.company || "Unknown company"}</p>
+                  <p className="muted">
+                    Critic Score: {res.job?.confidence_score ?? 0}/100
+                    {res.job?.location ? ` | ${res.job.location}` : ""}
+                    {res.job?.work_mode ? ` | ${res.job.work_mode}` : ""}
+                    {res.job?.salary ? ` | ${res.job.salary}` : ""}
+                  </p>
+                  <p className="muted">
+                    Platform: {res.job?.platform || "linkedin"}
+                    {res.job?.url ? " | " : ""}
+                    {res.job?.url ? <a href={res.job.url} target="_blank" rel="noreferrer">Open job</a> : null}
+                  </p>
+                </div>
+                <div className="badge ok">{res.result || "Applied"}</div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="empty-story">
+            <p className="strong">No successful applications yet</p>
+            <p className="muted">Once a job is applied successfully, it will appear here with company and role details.</p>
+          </div>
+        )}
+      </article>
+
+      <article className="panel">
+        <header className="panel-header">
+          <div>
             <p className="eyebrow">Generated Writing</p>
             <h2>Tailored cover letters for approved roles</h2>
           </div>

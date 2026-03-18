@@ -174,12 +174,12 @@ class SubmissionAgent(BaseAgent):
     def _canonical_linkedin_job_urls(self, job_url: str) -> list[str]:
         urls: list[str] = []
         cleaned = (job_url or "").strip()
-        if cleaned:
-            urls.append(cleaned)
         if "/jobs/view/" in cleaned:
             canonical = cleaned.split("?", 1)[0].rstrip("/")
             if canonical:
                 urls.append(canonical)
+        if cleaned:
+            urls.append(cleaned)
         deduped: list[str] = []
         for url in urls:
             if url and url not in deduped:
@@ -289,6 +289,8 @@ class SubmissionAgent(BaseAgent):
             "div[role='dialog']",
             ".jobs-easy-apply-modal",
             ".artdeco-modal",
+            ".jobs-easy-apply-content",
+            ".jobs-easy-apply-modal__content",
         ]
         for selector in selectors:
             try:
@@ -297,6 +299,16 @@ class SubmissionAgent(BaseAgent):
                     return modal
             except Exception:
                 continue
+        return None
+
+    def _wait_for_easy_apply_modal(self, page: Page, timeout_seconds: float = 8.0) -> Locator | None:
+        """Wait briefly for Easy Apply modal variants to appear."""
+        poll_count = max(4, int(timeout_seconds / 0.5))
+        for _ in range(poll_count):
+            modal = self._get_easy_apply_modal(page)
+            if modal is not None:
+                return modal
+            self.human_pause(0.5)
         return None
 
     def _get_external_form_scope(self, page: Page) -> Locator:
@@ -737,7 +749,13 @@ Return only the answer text.
             return config.USER_LINKEDIN_URL
         if any(k in attrs for k in ["website", "portfolio", "github"]):
             return config.USER_PORTFOLIO_URL
-        if any(k in attrs for k in ["year", "experience", "exp", "how many"]):
+        if any(k in attrs_lower for k in ["salary", "ctc", "compensation", "expected pay"]):
+            lpa = max(int(config.USER_MIN_SALARY or 0), 6)
+            annual_inr = lpa * 100000
+            return str(max(annual_inr, 1000))
+        if "how many" in attrs_lower and not any(k in attrs_lower for k in ["year", "experience", "exp"]):
+            return "150"
+        if any(k in attrs for k in ["year", "experience", "exp"]):
             if "python" in attrs_lower:
                 return profile.get("python_experience_years", str(config.USER_YEARS_EXPERIENCE))
             return str(config.USER_YEARS_EXPERIENCE)
@@ -751,10 +769,6 @@ Return only the answer text.
             return profile.get("end_month", calendar.month_abbr[date.today().month])
         if any(k in attrs_lower for k in ["description", "responsibilities", "summary of role", "work summary"]):
             return profile.get("summary", "") or (resume_summary or "").strip()[:350]
-        if any(k in attrs_lower for k in ["salary", "ctc", "compensation"]):
-            lpa = max(int(config.USER_MIN_SALARY or 0), 6)
-            annual_inr = lpa * 100000
-            return str(max(annual_inr, 1000))
         if any(k in attrs_lower for k in ["notice", "joining", "available", "availability"]):
             if any(k in attrs_lower for k in ["day", "days", "in days"]):
                 return "30"
@@ -963,9 +977,12 @@ Return only the answer text.
         """Return the current modal action button and its type."""
         for action_type, selector in EASY_APPLY_ACTION_SELECTORS:
             try:
-                button = modal.locator(selector).first
-                if button.count() > 0 and button.is_visible():
-                    return action_type, button
+                matches = modal.locator(selector)
+                total = matches.count()
+                for idx in range(min(total, 6)):
+                    candidate = matches.nth(idx)
+                    if candidate.is_visible():
+                        return action_type, candidate
             except Exception:
                 continue
         return "none", None
@@ -974,9 +991,12 @@ Return only the answer text.
         """Return the current visible action button on an external apply page."""
         for action_type, selector in EXTERNAL_ACTION_SELECTORS:
             try:
-                button = page.locator(selector).first
-                if button.count() > 0 and button.is_visible():
-                    return action_type, button
+                matches = page.locator(selector)
+                total = matches.count()
+                for idx in range(min(total, 8)):
+                    candidate = matches.nth(idx)
+                    if candidate.is_visible():
+                        return action_type, candidate
             except Exception:
                 continue
         return "none", None
@@ -985,24 +1005,91 @@ Return only the answer text.
         """Return the best available apply button on the LinkedIn job page."""
         for selector in APPLY_BUTTON_SELECTORS["easy"]:
             try:
-                button = page.locator(selector).first
-                if button.count() > 0 and button.is_visible():
-                    return "easy", button
+                matches = page.locator(selector)
+                total = matches.count()
+                for idx in range(min(total, 8)):
+                    candidate = matches.nth(idx)
+                    if candidate.is_visible():
+                        return "easy", candidate
             except Exception:
                 continue
 
+        # Fallback: inspect likely job-detail containers for role/button-based Easy Apply UI.
+        try:
+            scopes = [
+                ".jobs-unified-top-card",
+                ".job-details-jobs-unified-top-card__container--two-pane",
+                ".jobs-search__job-details--container",
+                "main",
+                "body",
+            ]
+            for scope_selector in scopes:
+                scope = page.locator(scope_selector).first
+                if scope.count() == 0 or not scope.is_visible():
+                    continue
+                candidates = scope.locator("button:visible, [role='button']:visible, a:visible")
+                total = min(candidates.count(), 60)
+                for idx in range(total):
+                    candidate = candidates.nth(idx)
+                    text = ""
+                    aria = ""
+                    try:
+                        text = (candidate.inner_text() or "").strip().lower()
+                    except Exception:
+                        text = ""
+                    try:
+                        aria = (candidate.get_attribute("aria-label") or "").strip().lower()
+                    except Exception:
+                        aria = ""
+                    combined = f"{text} {aria}".strip()
+                    if "easy apply" in combined:
+                        return "easy", candidate
+                    if any(tok in combined for tok in ["apply now", "apply"]):
+                        if "already applied" not in combined:
+                            return "external", candidate
+        except Exception:
+            pass
+
         for selector in APPLY_BUTTON_SELECTORS["external"]:
             try:
-                button = page.locator(selector).first
-                if button.count() == 0 or not button.is_visible():
-                    continue
-                text = (button.inner_text() or "").strip().lower()
-                if "easy apply" in text:
-                    continue
-                return "external", button
+                matches = page.locator(selector)
+                total = matches.count()
+                for idx in range(min(total, 8)):
+                    button = matches.nth(idx)
+                    if not button.is_visible():
+                        continue
+                    text = (button.inner_text() or "").strip().lower()
+                    if "easy apply" in text:
+                        continue
+                    return "external", button
             except Exception:
                 continue
         return "none", None
+
+    def _safe_click(self, button: Locator, label: str) -> bool:
+        """Click a button with fallbacks for overlays/interception issues."""
+        try:
+            button.scroll_into_view_if_needed(timeout=2_000)
+        except Exception:
+            pass
+        try:
+            button.click(timeout=4_000)
+            return True
+        except Exception:
+            pass
+        try:
+            button.click(force=True, timeout=4_000)
+            self.log.info(f"Forced click succeeded for {label}.")
+            return True
+        except Exception:
+            pass
+        try:
+            button.evaluate("el => el.click()")
+            self.log.info(f"JS click fallback succeeded for {label}.")
+            return True
+        except Exception as exc:
+            self.log.warning(f"Could not click {label}: {exc}")
+            return False
 
     def _is_submission_confirmed(self, page: Page) -> bool:
         """Detect common post-submit confirmation text on LinkedIn or external pages."""
@@ -1070,6 +1157,77 @@ Return only the answer text.
         self._force_answer_required_radios(page, resume_summary, cover_letter)
         self._fill_checkboxes(page, resume_summary, cover_letter)
         self._force_fill_remaining_select_like(page, resume_summary, cover_letter)
+        self._force_fix_invalid_numeric_inputs(page)
+
+    def _force_fix_invalid_numeric_inputs(self, page: Locator) -> None:
+        """Last-resort fix for invalid numeric fields after validation errors."""
+        try:
+            invalid_fields = page.locator(
+                "input[aria-invalid='true']:visible"
+            ).all()
+        except Exception:
+            invalid_fields = []
+
+        for field in invalid_fields:
+            try:
+                attrs = self._normalise_attrs(field).lower()
+                question = self._extract_question_text(field).lower()
+                context = f"{question} {attrs}".strip()
+                input_type = (field.get_attribute("type") or "").strip().lower()
+                input_mode = (field.get_attribute("inputmode") or "").strip().lower()
+
+                is_numeric_like = (
+                    input_type == "number"
+                    or input_mode == "numeric"
+                    or any(tok in context for tok in ["salary", "ctc", "compensation", "notice", "years", "months", "how many", "count", "percentage", "percent"])
+                )
+                if not is_numeric_like:
+                    continue
+
+                min_value = 0
+                try:
+                    raw_min = (field.get_attribute("min") or "").strip()
+                    if raw_min:
+                        min_value = int(float(raw_min))
+                except Exception:
+                    min_value = 0
+
+                # Parse inline validation text like:
+                # "Enter a whole number larger than 100"
+                try:
+                    field_container = field.locator("xpath=ancestor::*[self::div or self::label][1]").first
+                    err_text = (field_container.inner_text() or "").lower() if field_container.count() > 0 else ""
+                    threshold_match = re.search(r"larger than\s+(\d+(?:\.\d+)?)", err_text)
+                    if threshold_match:
+                        parsed_threshold = int(float(threshold_match.group(1)))
+                        min_value = max(min_value, parsed_threshold)
+                except Exception:
+                    pass
+
+                value = 101
+                if any(tok in context for tok in ["salary", "ctc", "compensation", "expected pay"]):
+                    value = 1200000
+                elif any(tok in context for tok in ["notice", "days", "availability"]):
+                    value = 30
+                elif any(tok in context for tok in ["experience", "years"]):
+                    value = max(1, self._safe_int(config.USER_YEARS_EXPERIENCE, fallback=2))
+                elif any(tok in context for tok in ["percentage", "percent", "%"]):
+                    value = 80
+                elif any(tok in context for tok in ["how many", "count", "team size"]):
+                    value = 150
+
+                if value <= min_value:
+                    value = min_value + 1
+
+                field.click()
+                try:
+                    field.press("Control+A")
+                except Exception:
+                    pass
+                field.fill(str(value))
+                self.human_pause(0.2)
+            except Exception:
+                continue
 
     def _force_fill_remaining_select_like(
         self,
@@ -1796,6 +1954,8 @@ Return only the answer text.
             "button[aria-label*='Applied']",
             "span.jobs-apply-button--top-card:has-text('Applied')",
             "div.jobs-apply-button--top-card:has-text('Applied')",
+            "section:has-text('Application status'):has-text('Application submitted')",
+            "div:has-text('Application status'):has-text('Application submitted')",
         ]
         for selector in applied_badges:
             try:
@@ -1804,6 +1964,12 @@ Return only the answer text.
                     return True
             except Exception:
                 continue
+        try:
+            body_text = (page.locator("body").inner_text() or "").lower()
+            if "application status" in body_text and "application submitted" in body_text:
+                return True
+        except Exception:
+            pass
         return False
 
 
@@ -1847,7 +2013,22 @@ Return only the answer text.
 
         apply_kind, apply_button = self._get_apply_button(page)
         if apply_button is None:
+            # One more recovery pass: query-string job URLs can land on non-actionable
+            # views. Re-open canonical /jobs/view/<id> and check apply again.
+            if "?" in (job.url or "") and "/jobs/view/" in (job.url or ""):
+                canonical_url = job.url.split("?", 1)[0].rstrip("/")
+                try:
+                    page.goto(canonical_url, wait_until="domcontentloaded", timeout=40_000)
+                    self.human_pause(1.5)
+                    apply_kind, apply_button = self._get_apply_button(page)
+                except Exception:
+                    pass
+
+        if apply_button is None:
+            debug_path = self._save_debug_snapshot(page, job, "no_apply_button")
             self.log.warning(f"No Apply or Easy Apply button for: {job.title} (page: {page.url[:80]})")
+            if debug_path:
+                self.log.warning(f"Saved no-apply debug screenshot: {debug_path}")
             return SubmitResult.SKIPPED
 
         if apply_kind == "external":
@@ -1856,12 +2037,15 @@ Return only the answer text.
             if self._browser is not None:
                 try:
                     with self._browser.expect_page(timeout=5_000) as new_page_info:
-                        apply_button.click()
+                        if not self._safe_click(apply_button, "Apply button"):
+                            return SubmitResult.SKIPPED
                     new_page = new_page_info.value
                 except Exception:
-                    apply_button.click()
+                    if not self._safe_click(apply_button, "Apply button"):
+                        return SubmitResult.SKIPPED
             else:
-                apply_button.click()
+                if not self._safe_click(apply_button, "Apply button"):
+                    return SubmitResult.SKIPPED
             self.human_pause()
             self.log.info(f"Clicked Apply for: {job.title}")
 
@@ -1880,14 +2064,37 @@ Return only the answer text.
                 resume_summary,
             )
 
-        apply_button.click()
+        if not self._safe_click(apply_button, "Easy Apply button"):
+            return SubmitResult.SKIPPED
         self.human_pause()
         self.log.info(f"Clicked Easy Apply for: {job.title}")
 
-        modal = self._get_easy_apply_modal(page)
+        modal = self._wait_for_easy_apply_modal(page, timeout_seconds=8.0)
         if modal is None:
-            self.log.warning(f"Easy Apply modal did not open for: {job.title}")
-            return SubmitResult.SKIPPED
+            # Retry once with alternative easy-apply triggers on the page.
+            try:
+                retry_selectors = [
+                    "button[aria-label*='Easy Apply']",
+                    "button:has-text('Easy Apply')",
+                    ".jobs-apply-button--top-card button",
+                    "[role='button']:has-text('Easy Apply')",
+                ]
+                for selector in retry_selectors:
+                    retry = page.locator(selector).first
+                    if retry.count() > 0 and retry.is_visible():
+                        if self._safe_click(retry, "Easy Apply retry button"):
+                            break
+                self.human_pause(1.0)
+            except Exception:
+                pass
+
+            modal = self._wait_for_easy_apply_modal(page, timeout_seconds=6.0)
+            if modal is None:
+                debug_path = self._save_debug_snapshot(page, job, "easy_apply_modal_missing")
+                self.log.warning(f"Easy Apply modal did not open for: {job.title}")
+                if debug_path:
+                    self.log.warning(f"Saved modal-missing debug screenshot: {debug_path}")
+                return SubmitResult.SKIPPED
 
         cover_letter = self._generate_cover_letter_if_needed(
             modal,

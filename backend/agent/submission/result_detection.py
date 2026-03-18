@@ -27,6 +27,19 @@ def is_submission_confirmed(page: Page) -> bool:
         except Exception:
             continue
 
+    # Text fallback for LinkedIn variants where badge selectors are inconsistent.
+    try:
+        body_text = (page.locator("body").inner_text() or "").lower()
+        if (
+            ("application status" in body_text and "application submitted" in body_text)
+            or "your application was sent" in body_text
+            or "application was sent" in body_text
+            or "application submitted now" in body_text
+        ):
+            return True
+    except Exception:
+        pass
+
     return False
 
 
@@ -44,4 +57,3 @@ def collect_visible_errors(page: Locator | Page) -> list[str]:
         except Exception:
             continue
     return messages
-

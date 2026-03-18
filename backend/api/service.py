@@ -16,7 +16,7 @@ from agent.tracker_agent import TrackerAgent
 from main import run_scrapers
 from tools.agent_jsonl import append_jsonl
 from tools.cover_letter import CoverLetterAgent
-from tools.resume_tools import extract_skills, summarise_resume
+from tools.resume_tools import extract_resume_intelligence, extract_skills, summarise_resume
 from tools.submission_tools import (
     build_submission_plan,
     ensure_runtime_browser_profile,
@@ -239,7 +239,6 @@ def execute_pipeline(
     original_runtime_browser_profile_dir = getattr(config, "RUNTIME_BROWSER_PROFILE_DIR", "")
     runtime_resume_path: Path | None = None
     runtime_browser_profile_dir: Path | None = None
-
     run_config = RunConfig.build(
         dry_run_override=dry_run,
         max_scraped_jobs=max_scraped_jobs,
@@ -263,12 +262,17 @@ def execute_pipeline(
             config.LINKEDIN_EMAIL = linkedin_email.strip()
         if linkedin_password:
             config.LINKEDIN_PASSWORD = linkedin_password
-        config.USE_TEMP_BROWSER_PROFILE = True
-        runtime_browser_profile_dir = ensure_runtime_browser_profile(
-            base_dir=Path("data") / "runtime_browser_profiles",
-            run_id=run_config.run_id,
-        )
-        config.RUNTIME_BROWSER_PROFILE_DIR = str(runtime_browser_profile_dir)
+        # If frontend supplies LinkedIn credentials, pin browser profile by account
+        # (not by run) so sessions stay stable while still separating accounts.
+        if linkedin_email.strip() or linkedin_password:
+            raw_key = linkedin_email.strip().lower() or "default_frontend_account"
+            profile_key = re.sub(r"[^a-z0-9._-]", "_", raw_key)[:120] or "default_frontend_account"
+            config.USE_TEMP_BROWSER_PROFILE = False
+            runtime_browser_profile_dir = ensure_runtime_browser_profile(
+                base_dir=Path("data") / "runtime_browser_profiles" / "by_account",
+                run_id=profile_key,
+            )
+            config.RUNTIME_BROWSER_PROFILE_DIR = str(runtime_browser_profile_dir)
         if resume_file_b64.strip():
             runtime_resume_path = _materialize_runtime_resume(
                 run_id=run_config.run_id,
@@ -328,6 +332,20 @@ def execute_pipeline(
             extra={"max_scraped_jobs": run_config.max_scraped_jobs},
         )
         raw_jobs = run_scrapers(queries, run_config=run_config, max_total_jobs=run_config.max_scraped_jobs)
+        if not raw_jobs and easy_apply_only:
+            _emit_progress(
+                progress_callback,
+                agent="PlannerAgent",
+                phase="scraping-retry",
+                message="No Easy Apply jobs found; retrying without Easy Apply-only filter.",
+                extra={"easy_apply_only": False},
+            )
+            relaxed_queries = [dict(query, easy_apply_only=False) for query in queries]
+            raw_jobs = run_scrapers(
+                relaxed_queries,
+                run_config=run_config,
+                max_total_jobs=run_config.max_scraped_jobs,
+            )
         append_jsonl(
             context_path,
             "raw_jobs",
@@ -452,13 +470,25 @@ def execute_pipeline(
             extra={"approved_jobs": len(approved_jobs)},
         )
         resume_skills = extract_skills(config.USER_RESUME_PATH)
+        cover_letter_agent = CoverLetterAgent(run_config=run_config)
         try:
             resume_text = summarise_resume(
                 config.USER_RESUME_PATH,
-                llm_caller=CoverLetterAgent(run_config=run_config).ask_llm,
+                llm_caller=cover_letter_agent.ask_llm,
             )
         except Exception:
             resume_text = summarise_resume(config.USER_RESUME_PATH)
+
+        try:
+            resume_intelligence = extract_resume_intelligence(
+                config.USER_RESUME_PATH,
+                llm_caller=cover_letter_agent.ask_llm,
+            )
+        except Exception:
+            resume_intelligence = ""
+
+        if resume_intelligence:
+            resume_text = f"{resume_text}\n\n{resume_intelligence}"
 
         if resume_skills:
             resume_text = f"{resume_text}\n\nRelevant skills: {', '.join(resume_skills[:20])}"
@@ -470,7 +500,6 @@ def execute_pipeline(
             approved_jobs=approved_jobs,
             submission_target_successes=submission_target_successes,
         )
-        cover_letter_agent = CoverLetterAgent(run_config=run_config)
         cover_letters: dict[str, str] = {}
         for job in jobs_to_apply:
             try:
@@ -515,6 +544,45 @@ def execute_pipeline(
             resume_summary=resume_text,
             applied_ids=applied_ids,
         )
+        # If initial critic-selected jobs produce no success, try additional scored jobs.
+        initial_successes = sum(1 for r in results if r.result.value in ("Applied", "DryRun"))
+        if initial_successes == 0:
+            attempted_ids = {
+                r.job.job_id
+                for r in results
+                if getattr(r, "job", None) and getattr(r.job, "job_id", "")
+            }
+            remaining_jobs = [
+                job for job in scored_jobs
+                if job.job_id not in attempted_ids
+            ]
+            if remaining_jobs:
+                # Keep rescue bounded while still giving meaningful fallback.
+                rescue_jobs = remaining_jobs[: min(5, len(remaining_jobs))]
+                for job in rescue_jobs:
+                    if job.job_id in cover_letters:
+                        continue
+                    try:
+                        generated = cover_letter_agent.generate(job, resume_text).strip()
+                        if generated:
+                            cover_letters[job.job_id] = generated
+                    except Exception as e:
+                        cover_letter_agent.log.warning(
+                            f"Cover letter generation failed for rescue job {job.title} @ {job.company}: {e}"
+                        )
+
+                submission.log.info(
+                    "No successful applications in initial fallback set; trying "
+                    f"{len(rescue_jobs)} additional scored jobs."
+                )
+                extra_results = submission.run(
+                    rescue_jobs,
+                    cover_letters,
+                    resume_summary=resume_text,
+                    applied_ids=applied_ids | attempted_ids,
+                )
+                results.extend(extra_results)
+
         append_jsonl(context_path, "submission_results", {"results": results, "run_id": run_config.run_id})
 
         _emit_progress(

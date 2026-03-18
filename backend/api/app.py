@@ -58,6 +58,7 @@ log = logging.getLogger("api")
 
 _RUNS: dict[str, dict[str, Any]] = {}
 _RUNS_LOCK = threading.Lock()
+_PIPELINE_EXEC_LOCK = threading.Lock()
 _STARTUP_STATUS: dict[str, Any] = {}
 _FIREBASE_READY = False
 _FIREBASE_ERROR = ""
@@ -549,23 +550,24 @@ def run_pipeline(
     api_run_id = f"api-run-sync-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}"
     _set_run_state(api_run_id, status_value="running", message="Pipeline started.", payload={})
     try:
-        outcome = execute_pipeline(
-            goal=request.goal,
-            config_only=request.config_only,
-            dry_run=request.dry_run,
-            easy_apply_only=request.easy_apply_only,
-            max_scraped_jobs=request.max_scraped_jobs,
-            max_scoring_jobs=request.max_scoring_jobs,
-            max_applications=request.max_applications,
-            submission_target_successes=request.submission_target_successes,
-            max_approved_candidates=request.max_approved_candidates,
-            linkedin_email=request.linkedin_email,
-            linkedin_password=request.linkedin_password,
-            resume_file_name=request.resume_file_name,
-            resume_file_b64=request.resume_file_b64,
-            work_mode_preference=request.work_mode_preference,
-            progress_callback=lambda progress: _update_run_progress(api_run_id, progress),
-        )
+        with _PIPELINE_EXEC_LOCK:
+            outcome = execute_pipeline(
+                goal=request.goal,
+                config_only=request.config_only,
+                dry_run=request.dry_run,
+                easy_apply_only=request.easy_apply_only,
+                max_scraped_jobs=request.max_scraped_jobs,
+                max_scoring_jobs=request.max_scoring_jobs,
+                max_applications=request.max_applications,
+                submission_target_successes=request.submission_target_successes,
+                max_approved_candidates=request.max_approved_candidates,
+                linkedin_email=request.linkedin_email,
+                linkedin_password=request.linkedin_password,
+                resume_file_name=request.resume_file_name,
+                resume_file_b64=request.resume_file_b64,
+                work_mode_preference=request.work_mode_preference,
+                progress_callback=lambda progress: _update_run_progress(api_run_id, progress),
+            )
         _set_run_state(api_run_id, status_value=outcome["status"], message=outcome["message"], payload=outcome["payload"])
         _safe_notify_run_finished(api_run_id, status=outcome["status"], message=outcome["message"], payload=outcome.get("payload") or {})
         return RunResponse(**outcome)
@@ -586,23 +588,24 @@ def run_pipeline_async(
 
     def _worker() -> None:
         try:
-            outcome = execute_pipeline(
-                goal=request.goal,
-                config_only=request.config_only,
-                dry_run=request.dry_run,
-                easy_apply_only=request.easy_apply_only,
-                max_scraped_jobs=request.max_scraped_jobs,
-                max_scoring_jobs=request.max_scoring_jobs,
-                max_applications=request.max_applications,
-                submission_target_successes=request.submission_target_successes,
-                max_approved_candidates=request.max_approved_candidates,
-                linkedin_email=request.linkedin_email,
-                linkedin_password=request.linkedin_password,
-                resume_file_name=request.resume_file_name,
-                resume_file_b64=request.resume_file_b64,
-                work_mode_preference=request.work_mode_preference,
-                progress_callback=lambda progress: _update_run_progress(run_id, progress),
-            )
+            with _PIPELINE_EXEC_LOCK:
+                outcome = execute_pipeline(
+                    goal=request.goal,
+                    config_only=request.config_only,
+                    dry_run=request.dry_run,
+                    easy_apply_only=request.easy_apply_only,
+                    max_scraped_jobs=request.max_scraped_jobs,
+                    max_scoring_jobs=request.max_scoring_jobs,
+                    max_applications=request.max_applications,
+                    submission_target_successes=request.submission_target_successes,
+                    max_approved_candidates=request.max_approved_candidates,
+                    linkedin_email=request.linkedin_email,
+                    linkedin_password=request.linkedin_password,
+                    resume_file_name=request.resume_file_name,
+                    resume_file_b64=request.resume_file_b64,
+                    work_mode_preference=request.work_mode_preference,
+                    progress_callback=lambda progress: _update_run_progress(run_id, progress),
+                )
             _set_run_state(run_id, status_value=outcome["status"], message=outcome["message"], payload=outcome["payload"])
             _safe_notify_run_finished(run_id, status=outcome["status"], message=outcome["message"], payload=outcome.get("payload") or {})
         except Exception as e:
@@ -625,10 +628,3 @@ def get_run(
     if not data:
         raise HTTPException(status_code=404, detail="Run not found")
     return RunResponse(**data)
-
-
-
-
-
-
-

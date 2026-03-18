@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { signInWithPopup, signOut, type User } from 'firebase/auth'
+import {
+  getRedirectResult,
+  signInWithPopup,
+  signInWithRedirect,
+  signOut,
+  type User,
+} from 'firebase/auth'
 import { auth, firebaseSetupError, googleProvider } from '../config/firebase'
 import { useRunForm } from '../hooks/useRunForm'
 import {
@@ -64,6 +70,7 @@ export function ConsoleDashboard() {
   const { form, setField } = useRunForm()
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
+  const [redirectPending, setRedirectPending] = useState(false)
 
   const isAuthed = useMemo(() => token.length > 0, [token])
   const latestRun = syncRun
@@ -146,6 +153,50 @@ export function ConsoleDashboard() {
     } as RunRequest
   }
 
+  const completeFirebaseLogin = useCallback(async (user: User) => {
+    const idToken = await user.getIdToken()
+    await verifyFirebaseToken(idToken)
+    setFirebaseUser(user)
+    setToken(idToken)
+    setLinkedinEmail(user.email || '')
+  }, [])
+
+  function shouldFallbackToRedirect(error: unknown): boolean {
+    const msg = String(error).toLowerCase()
+    return (
+      msg.includes('auth/popup-blocked') ||
+      msg.includes('auth/popup-closed-by-user') ||
+      msg.includes('auth/cancelled-popup-request') ||
+      msg.includes('cross-origin-opener-policy') ||
+      msg.includes('window.closed')
+    )
+  }
+
+  useEffect(() => {
+    if (!auth || !googleProvider || redirectPending) return
+    const currentAuth = auth
+    let cancelled = false
+
+    async function finishRedirectLogin() {
+      setRedirectPending(true)
+      try {
+        const result = await getRedirectResult(currentAuth)
+        if (!result || cancelled) return
+        await completeFirebaseLogin(result.user)
+        if (!cancelled) setMessage('Google sign-in succeeded.')
+      } catch (error) {
+        if (!cancelled) setMessage(`Login failed: ${String(error)}`)
+      } finally {
+        if (!cancelled) setRedirectPending(false)
+      }
+    }
+
+    void finishRedirectLogin()
+    return () => {
+      cancelled = true
+    }
+  }, [completeFirebaseLogin, redirectPending])
+
   async function onGoogleLogin() {
     if (!auth || !googleProvider) {
       setMessage(firebaseSetupError || 'Firebase is not configured yet.')
@@ -155,13 +206,14 @@ export function ConsoleDashboard() {
     setMessage('')
     try {
       const result = await signInWithPopup(auth, googleProvider)
-      const idToken = await result.user.getIdToken()
-      await verifyFirebaseToken(idToken)
-      setFirebaseUser(result.user)
-      setToken(idToken)
-      setLinkedinEmail(result.user.email || '')
+      await completeFirebaseLogin(result.user)
       setMessage('Google sign-in succeeded.')
     } catch (error) {
+      if (shouldFallbackToRedirect(error)) {
+        setMessage('Popup login was blocked by browser policy. Switching to redirect login...')
+        await signInWithRedirect(auth, googleProvider)
+        return
+      }
       setMessage(`Login failed: ${String(error)}`)
     } finally {
       setLoading(false)

@@ -1,4 +1,4 @@
-"""
+﻿"""
 main.py
 -------
 Main orchestrator for the Job Application Agent System.
@@ -91,19 +91,19 @@ def run_scrapers(
     try:
         li_scraper.start()
         if not li_scraper.login():
-            print("[Main] LinkedIn login failed - skipping LinkedIn.")
-            return all_jobs
+            print("[Main] LinkedIn login did not fully complete - continuing with best-effort scraping.")
 
         # Seed pass: try to capture at least one relevant Easy Apply job early.
         # This gives the pipeline a higher chance of including a low-friction application.
         primary_query = queries[0]
+        primary_easy_apply_only = bool(primary_query.get("easy_apply_only", True))
         if max_total_jobs > 0:
             try:
                 seed_jobs = li_scraper.search_jobs(
                     role=primary_query["role"],
                     location=primary_query["location"],
                     keywords=primary_query.get("keywords", []),
-                    easy_apply_only=True,
+                    easy_apply_only=primary_easy_apply_only,
                     max_pages=1,
                     max_days_old=primary_query.get("max_days_old", 30),
                     max_jobs=1,
@@ -139,12 +139,12 @@ def run_scrapers(
 
             try:
                 requested_max = min(query.get("max_jobs", max_total_jobs), remaining_jobs)
+                query_easy_apply_only = bool(query.get("easy_apply_only", True))
                 jobs = li_scraper.search_jobs(
                     role=query["role"],
                     location=query["location"],
                     keywords=query.get("keywords", []),
-                    # Enforce Easy Apply for all collected jobs.
-                    easy_apply_only=True,
+                    easy_apply_only=query_easy_apply_only,
                     max_pages=query.get("max_pages", 3),
                     max_days_old=query.get("max_days_old", 30),
                     max_jobs=requested_max,
@@ -157,7 +157,7 @@ def run_scrapers(
                         role=query["role"],
                         location=query["location"],
                         keywords=[],
-                        easy_apply_only=True,
+                        easy_apply_only=False if query_easy_apply_only else query_easy_apply_only,
                         max_pages=query.get("max_pages", 3),
                         max_days_old=max(query.get("max_days_old", 30), 45),
                         max_jobs=requested_max,
@@ -211,7 +211,6 @@ def run_scrapers(
             pass
 
     return all_jobs
-
 
 def print_summary_table(jobs: list[JobListing]) -> None:
     if not jobs:
@@ -483,6 +482,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
 
 
 

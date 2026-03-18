@@ -116,19 +116,20 @@ export const OverviewPanel: React.FC<OverviewPanelProps> = ({ latestRun, tracker
 
                 {submissionFinalists.length ? (
                   <div className="submission-plan-stack">
-                    {submissionFinalists.map((job: SubmissionPlanFinalist, index) => (
-                      <div key={`${job.job_id || job.title}-${index}`} className="submission-plan-card">
-                        <div>
-                          <p className="strong">{job.title || "Untitled role"}</p>
-                          <p className="muted">{job.company || "Unknown company"}{job.location ? ` | ${job.location}` : ""}</p>
-                        </div>
-                        <div className="submission-plan-meta">
-                          <span className="badge neutral">Queue {index + 1}</span>
-                          <span>{job.confidence_score ?? 0}/100</span>
-                        </div>
-                      </div>
-                    ))}
+                {submissionFinalists.map((job: SubmissionPlanFinalist, index) => (
+                  <div key={`${job.job_id || job.title}-${index}`} className="submission-plan-card">
+                    <div>
+                      <p className="strong">{job.title || "Untitled role"}</p>
+                      <p className="muted">{job.company || "Unknown company"}{job.location ? ` | ${job.location}` : ""}</p>
+                      <p className="muted">Critic Score: {job.confidence_score ?? 0}/100</p>
+                    </div>
+                    <div className="submission-plan-meta">
+                      <span className="badge neutral">Queue {index + 1}</span>
+                      <span>{job.platform || "linkedin"}</span>
+                    </div>
                   </div>
+                ))}
+              </div>
                 ) : null}
               </div>
             ) : null}
@@ -189,10 +190,11 @@ export const OverviewPanel: React.FC<OverviewPanelProps> = ({ latestRun, tracker
                   <div>
                     <p className="strong">{job.title || "Untitled role"}</p>
                     <p className="muted">{job.company || "Unknown company"}</p>
+                    <p className="muted">Critic Score: {job.confidence_score ?? 0}/100</p>
                   </div>
                   <div className="job-meta">
-                    <span>{job.confidence_score ?? 0}/100</span>
                     <span>{job.work_mode || "unknown"}</span>
+                    <span>{job.location || "unknown location"}</span>
                   </div>
                 </div>
               ))}

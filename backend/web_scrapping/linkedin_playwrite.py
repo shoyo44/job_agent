@@ -436,11 +436,26 @@ class LinkedInPlaywrightScraper:
 
     def _is_promoted_card(self, card) -> bool:
         """Best-effort check for sponsored/promoted result cards."""
+        promoted_selectors = [
+            "span:has-text('Promoted')",
+            "div:has-text('Promoted')",
+            "span.job-card-container__footer-item:has-text('Promoted')",
+            ".job-card-container__footer-item--highlighted",
+        ]
+        for selector in promoted_selectors:
+            try:
+                marker = card.query_selector(selector)
+                if marker:
+                    text = (marker.inner_text() or "").strip().lower()
+                    if "promoted" in text:
+                        return True
+            except Exception:
+                continue
         try:
             text = (card.inner_text() or "").lower()
         except Exception:
             return False
-        return "promoted" in text
+        return "promoted job" in text or "\npromoted\n" in text
 
     # ------------------------------------------------------------------
     # Login
@@ -473,6 +488,11 @@ class LinkedInPlaywrightScraper:
         self._page.goto(f"{LINKEDIN_BASE}/login", wait_until="domcontentloaded", timeout=30_000)
         self.delay.sleep_page_load()
 
+        # LinkedIn can redirect authenticated sessions away from /login.
+        if self._is_logged_in():
+            self.log.info("Session became active on login redirect, skipping credential fill.")
+            return True
+
         if self._page.locator("#username").count() > 0:
             email_selector = "#username"
             password_selector = "#password"
@@ -480,7 +500,18 @@ class LinkedInPlaywrightScraper:
             email_selector = "#session_key"
             password_selector = "#session_password"
         else:
-            self.log.warning("Could not find login fields.")
+            current_url = (self._page.url or "").lower()
+            nav = self._page.query_selector("nav[aria-label='Global'], .global-nav")
+            if nav is not None and "linkedin.com" in current_url:
+                self.log.info("Login fields missing but LinkedIn navigation is present; continuing with existing session.")
+                return True
+            if any(token in current_url for token in ["/checkpoint", "/challenge", "/authwall"]):
+                self.log.warning(
+                    "LinkedIn presented a checkpoint/authwall page. "
+                    "Manual verification may be required for this account session."
+                )
+            else:
+                self.log.warning("Could not find login fields.")
             return False
 
         # Type email character-by-character for human-like behaviour
@@ -761,18 +792,47 @@ class LinkedInPlaywrightScraper:
         if not link_el:
             link_el = card.query_selector("a[href*='/jobs/view/']")
 
-        if not title_el or not link_el:
+        if not link_el:
             return None
 
-        title = (title_el.inner_text() or "").strip()
+        title = ""
+        if title_el:
+            try:
+                title = (title_el.inner_text() or "").strip()
+            except Exception:
+                title = ""
         if not title:
-            title = (link_el.get_attribute("aria-label") or "").strip()
+            try:
+                title = (link_el.get_attribute("aria-label") or "").strip()
+            except Exception:
+                title = ""
+        if not title:
+            try:
+                heading = card.query_selector("h3, h4, strong")
+                title = (heading.inner_text() or "").strip() if heading else ""
+            except Exception:
+                title = ""
         if not title:
             return None
 
-        company      = company_el.inner_text().strip() if company_el else "Unknown"
-        location_raw = loc_el.inner_text().strip() if loc_el else ""
-        description_snippet = (desc_el.inner_text().strip() if desc_el else "")
+        company = "Unknown"
+        try:
+            company = company_el.inner_text().strip() if company_el else "Unknown"
+        except Exception:
+            company = "Unknown"
+
+        location_raw = ""
+        try:
+            location_raw = loc_el.inner_text().strip() if loc_el else ""
+        except Exception:
+            location_raw = ""
+
+        description_snippet = ""
+        try:
+            description_snippet = (desc_el.inner_text().strip() if desc_el else "")
+        except Exception:
+            description_snippet = ""
+
         url          = link_el.get_attribute("href") or ""
         if url and not url.startswith("http"):
             url = LINKEDIN_BASE + url
@@ -820,9 +880,9 @@ class LinkedInPlaywrightScraper:
 
         self.start()
         try:
-            if not self.login():
-                self.log.warning("Could not login. Skipping LinkedIn scrape.")
-                return []
+            logged_in = self.login()
+            if not logged_in:
+                self.log.warning("Could not login cleanly; continuing with best-effort LinkedIn scrape.")
             return self.search_jobs(
                 role            = query["role"],
                 location        = query["location"],

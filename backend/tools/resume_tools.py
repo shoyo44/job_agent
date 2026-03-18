@@ -56,6 +56,49 @@ Return ONLY the summary paragraph, nothing else.
     return llm_caller(prompt, system="You are a professional resume writer. Be concise.")
 
 
+def extract_resume_intelligence(pdf_path: Path, llm_caller=None) -> str:
+    """
+    Extract structured, role-relevant resume highlights for downstream prompts.
+    This is designed to be appended into cover-letter context.
+    """
+    text = extract_text_from_pdf(pdf_path)
+    if not text.strip():
+        return ""
+
+    if llm_caller is None:
+        fallback = "Resume highlights:\n- Strong software/AI background\n- Hands-on project delivery\n- Problem solving and collaboration"
+        return fallback
+
+    prompt = f"""
+Extract concise resume intelligence for job applications.
+Return plain text using this exact shape:
+
+Resume highlights:
+- Core skills: <comma-separated technical strengths>
+- Experience snapshot: <years/domain summary>
+- Notable achievements: <1-2 measurable outcomes>
+- Projects/tools: <relevant stack and project themes>
+- Target role fit: <why this profile fits AI/ML engineering roles>
+
+Rules:
+- Use only facts from resume text.
+- Do not invent numbers, employers, or certifications.
+- Keep total output under 140 words.
+
+Resume text (first 3000 chars):
+{text[:3000]}
+"""
+    return llm_caller(
+        prompt,
+        system=(
+            "You are a strict resume analyst. Extract only grounded facts from the resume. "
+            "Be concise and application-focused."
+        ),
+        temperature=0.1,
+        max_tokens=220,
+    ).strip()
+
+
 def extract_skills(pdf_path: Path) -> list[str]:
     """
     Returns a list of technical skill keywords found in the resume.

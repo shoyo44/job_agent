@@ -1,32 +1,63 @@
 # Setup Guide
 
-This file is the practical setup companion to the main [README.md](/d:/Projects/Job%20Agent/README.md).
+This guide takes you from a fresh clone to a stable local environment for both backend and frontend flows.
 
-Use this guide if you want a direct, step-by-step path from a fresh clone to a working local run.
+For architecture and system-level understanding, use [README.md](/d:/Projects/Job%20Agent/README.md).
+For quick command lookup, use [COMMANDS.md](/d:/Projects/Job%20Agent/COMMANDS.md).
 
-## Goal
+## System Architecture Snapshot
+
+The platform has four runtime layers:
+
+1. Frontend (`React + Vite`): onboarding, run launch, live status, run results.
+2. Backend API (`FastAPI`): auth validation, diagnostics, run orchestration endpoints.
+3. Agent Pipeline: `Manager -> Planner -> Critic -> CoverLetter -> Submission -> Tracker`.
+4. Integrations: LinkedIn (Playwright), Cloudflare Workers AI, Firebase Auth, MongoDB/Excel, Telegram.
+
+```text
+Frontend (5173)
+   |
+   | HTTPS + Firebase Bearer token
+   v
+FastAPI Backend (8000)
+   |
+   +--> ManagerAgent (goal/profile parsing)
+   +--> PlannerAgent (query build + scoring)
+   +--> CriticAgent (finalist selection)
+   +--> CoverLetterAgent (tailored drafts)
+   +--> SubmissionAgent (Easy Apply automation + fallback order)
+   +--> TrackerAgent (MongoDB/Excel persistence)
+   |
+   +--> External systems: LinkedIn / Cloudflare AI / Firebase / Telegram
+```
+
+For full component and sequence diagrams, see:
+- [README.md](/d:/Projects/Job%20Agent/README.md) -> `Clean System Architecture`
+
+## What You Will Have At The End
 
 By the end of this guide, you should be able to:
 
-- run the FastAPI backend on `http://127.0.0.1:8000`
-- run the frontend on `http://127.0.0.1:5173`
-- sign in with Google
-- start a pipeline run from the frontend
+- run the backend at `http://127.0.0.1:8000`
+- run the frontend at `http://127.0.0.1:5173`
+- authenticate with Firebase Google sign-in
+- start and monitor a pipeline run from the dashboard
+- validate startup health and diagnose common failures
 
 ## Prerequisites
 
-Install these first:
+Required:
 
-- Python 3.11 or newer
-- Node.js 20 or newer
-- npm 10 or newer
-- a Firebase project for Google sign-in
-- a LinkedIn account
+- Python 3.11+
+- Node.js 20+
+- npm 10+
+- Firebase project with Google sign-in enabled
+- LinkedIn account
 
 Optional but recommended:
 
-- MongoDB Atlas or local MongoDB
-- Telegram bot token and chat ID
+- MongoDB Atlas (or local MongoDB)
+- Telegram bot token + chat ID
 
 ## Step 1: Clone the project
 
@@ -35,7 +66,7 @@ git clone <your-repo-url>
 cd "Job Agent"
 ```
 
-## Step 2: Create a Python virtual environment
+## Step 2: Create and activate Python environment
 
 Windows PowerShell:
 
@@ -51,28 +82,33 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
+Validation:
+
+```powershell
+python --version
+pip --version
+```
+
 ## Step 3: Install backend dependencies
 
-From the project root:
+From project root:
 
 ```powershell
 pip install -r requirements.txt
 ```
 
-This installs the packages listed in:
+Dependency sources:
 
 - [requirements.txt](/d:/Projects/Job%20Agent/requirements.txt)
 - [backend/requirements.txt](/d:/Projects/Job%20Agent/backend/requirements.txt)
 
-## Step 4: Install Playwright Chromium
-
-This project uses Playwright for LinkedIn scraping and submission.
+## Step 4: Install Playwright browser runtime
 
 ```powershell
 python -m playwright install chromium
 ```
 
-If that is not enough on your machine, run:
+If browser launch still fails on your machine:
 
 ```powershell
 python -m playwright install
@@ -86,13 +122,21 @@ npm install
 cd ..
 ```
 
-## Step 6: Create the backend environment file
+Validation:
 
-Create:
+```powershell
+cd frontend
+npm ls --depth=0
+cd ..
+```
+
+## Step 6: Configure backend environment
+
+Create file:
 
 - `backend/.env`
 
-You can base it on the following template.
+Suggested template:
 
 ```env
 CF_ACCOUNT_ID=
@@ -139,32 +183,32 @@ USE_TEMP_BROWSER_PROFILE=false
 RUNTIME_BROWSER_PROFILE_DIR=
 ```
 
-Notes:
+Important notes:
 
-- `LINKEDIN_EMAIL` and `LINKEDIN_PASSWORD` can also be entered at runtime from the frontend.
-- `USER_RESUME_PATH` should point to a real PDF resume.
-- MongoDB is optional, but recommended.
-- Telegram is optional.
+- `LINKEDIN_EMAIL` and `LINKEDIN_PASSWORD` can also be supplied at runtime from frontend onboarding.
+- `USER_RESUME_PATH` must point to a real PDF.
+- MongoDB is optional, but strongly recommended for stable history/stats.
+- Telegram is optional and should not block pipeline completion.
 
-## Step 7: Add your resume
+## Step 7: Add resume file
 
-Place your resume PDF at:
+Place your resume at:
 
 - `backend/data/resume.pdf`
 
-or update `USER_RESUME_PATH` in `backend/.env` to the correct file.
+If stored elsewhere, update `USER_RESUME_PATH`.
 
-## Step 8: Add Firebase Admin credentials for the backend
+## Step 8: Configure Firebase Admin for backend
 
-Place the Firebase Admin service account JSON file here:
+Place Firebase Admin service account JSON at:
 
 - `backend/serviceAccountKey.json`
 
-The backend uses that file to verify Firebase ID tokens sent by the frontend.
+Used by backend to verify Firebase ID tokens from frontend requests.
 
-## Step 9: Create the frontend environment file
+## Step 9: Configure frontend environment
 
-Create:
+Create file:
 
 - `frontend/.env`
 
@@ -181,103 +225,103 @@ VITE_FIREBASE_APP_ID=
 VITE_FIREBASE_MEASUREMENT_ID=
 ```
 
-These values come from your Firebase web app configuration.
+All Firebase values come from your Firebase web app settings.
 
-## Step 10: Start the backend
+## Step 10: Start backend
 
 ```powershell
 cd backend
 uvicorn api.app:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-Expected result:
+Expected startup checks:
 
-- FastAPI starts successfully
-- startup diagnostics appear in the terminal
+- health endpoint responds
+- startup diagnostics endpoint responds
+- Firebase status is visible
+- MongoDB status is visible if configured
 
-Useful checks:
+Useful URLs:
 
 - `http://127.0.0.1:8000/api/v1/health`
 - `http://127.0.0.1:8000/api/v1/startup`
 
-If MongoDB or Cloudflare is misconfigured, `/api/v1/startup` will help explain it.
+## Step 11: Start frontend
 
-## Step 11: Start the frontend
-
-Open a new terminal:
+In a second terminal:
 
 ```powershell
 cd frontend
 npm run dev
 ```
 
-Then open:
+Open:
 
 - `http://127.0.0.1:5173`
 
-## Step 12: Complete onboarding
+## Step 12: Complete onboarding in UI
 
-In the frontend:
+1. Sign in with Google.
+2. Enter LinkedIn credentials if not already in backend `.env`.
+3. Upload resume.
+4. Confirm pipeline preferences.
 
-1. Sign in with Google
-2. Enter LinkedIn email and password if not already in backend `.env`
-3. Upload your resume
-4. Confirm onboarding
+## Step 13: Run safe first pipeline
 
-## Step 13: Run a safe first test
-
-For the first run, use:
+Recommended first-run settings:
 
 - `dry_run = true`
 - `easy_apply_only = true`
 
-Suggested goal:
+Suggested goal example:
 
 - `AI Engineer in Bangalore`
 
-This is safer than starting with live submission immediately.
+Why this is safer:
 
-## Step 14: Run a real submission
+- validates parsing/scraping/scoring/selection without committing real applications
 
-Once dry-run works:
+## Step 14: Move to live submission
 
-- set `dry_run = false`
-- keep `easy_apply_only = true`
+After successful dry-run validation:
 
-The current pipeline behavior is:
+- switch `dry_run` to `false`
+- keep `easy_apply_only = true` initially
 
-- scrape matching jobs
-- score top 5
-- critic keeps top 3
-- submission tries finalists in order
-- stop after 1 successful application
+Default live behavior:
 
-## Recommended verification checklist
+- scrape jobs
+- score top candidates
+- select top finalists
+- attempt submissions sequentially
+- stop after configured success threshold
 
-Before blaming the frontend, confirm these:
+## Verification Checklist
 
-### Backend checks
+Before investigating deeper issues, verify:
+
+### Backend
 
 - `GET /api/v1/health` works
 - `GET /api/v1/startup` works
-- Firebase shows ready
-- MongoDB shows ready if configured
+- Firebase status is healthy
+- MongoDB status healthy (if configured)
 
-### Frontend checks
+### Frontend
 
-- `VITE_API_BASE_URL` points to the correct backend port
+- `VITE_API_BASE_URL` matches backend host/port
 - Google sign-in works
 - onboarding completes
 
-### LinkedIn checks
+### Automation
 
-- LinkedIn credentials are valid
-- Playwright Chromium is installed
-- the logs show scraping and submission using the expected runtime browser flow
+- Playwright browser installs successfully
+- scraper and submission logs show expected run progression
+- runtime browser profile handoff is visible in logs
 
-## Common commands
+## Common Commands
 
-### Install everything
+Install all dependencies:
 
 ```powershell
 python -m venv .venv
@@ -288,70 +332,77 @@ cd frontend
 npm install
 ```
 
-### Run backend
+Run backend:
 
 ```powershell
 cd backend
 uvicorn api.app:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### Run frontend
+Run frontend:
 
 ```powershell
 cd frontend
 npm run dev
 ```
 
-### Run CLI version
+Run backend CLI mode:
 
 ```powershell
 cd backend
 python main.py
 ```
 
-### Run tests
+Run backend tests:
 
 ```powershell
 cd backend
 pytest -q
 ```
 
-## Troubleshooting quick notes
+## Troubleshooting
 
-### `Failed to fetch`
+### Frontend `Failed to fetch`
 
-Usually means:
+Likely causes:
 
-- backend is not running
-- frontend is pointing to the wrong backend URL
+- backend not running
+- wrong `VITE_API_BASE_URL`
 - CORS mismatch
 
-### `Mongo(ok=False)`
+### MongoDB `ok=False` in startup diagnostics
 
-Usually means:
+Likely causes:
 
-- bad `MONGODB_URI`
-- Atlas IP allowlist problem
-- auth problem
+- invalid `MONGODB_URI`
+- Atlas allowlist/network issue
+- auth credentials issue
 
 ### Firebase login fails
 
 Check:
 
-- frontend Firebase env vars
+- frontend Firebase values
 - backend `serviceAccountKey.json`
-- local system time
+- local system clock skew
 
-### LinkedIn goes to feed instead of applying
+### LinkedIn navigates to feed instead of target job
 
-That usually means LinkedIn login succeeded but the session was not restored cleanly onto the actual target job page. The backend now tries to validate that it returned to a real `/jobs/view/...` page before continuing.
+Likely session restoration/handoff issue. Confirm logs indicate recovery to a valid `/jobs/view/...` URL before apply steps.
 
-## Related files
+## Security Checklist
+
+- do not commit `backend/.env`
+- do not commit `frontend/.env`
+- treat `backend/serviceAccountKey.json` as sensitive
+- do not log or share LinkedIn credentials
+- rotate API keys if leaked
+
+## Related Files
 
 - [README.md](/d:/Projects/Job%20Agent/README.md)
-- [backend/config.py](/d:/Projects/Job%20Agent/backend/config.py)
-- [backend/api/app.py](/d:/Projects/Job%20Agent/backend/api/app.py)
-- [backend/api/service.py](/d:/Projects/Job%20Agent/backend/api/service.py)
-- [frontend/src/services/api.ts](/d:/Projects/Job%20Agent/frontend/src/services/api.ts)
-
-If you want to onboard a new teammate, send them this file first and the main README second.
+- [COMMANDS.md](/d:/Projects/Job%20Agent/COMMANDS.md)
+- [config.py](/d:/Projects/Job%20Agent/backend/config.py)
+- [app.py](/d:/Projects/Job%20Agent/backend/api/app.py)
+- [service.py](/d:/Projects/Job%20Agent/backend/api/service.py)
+- [api.ts](/d:/Projects/Job%20Agent/frontend/src/services/api.ts)
