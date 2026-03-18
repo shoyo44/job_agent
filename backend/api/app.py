@@ -306,15 +306,16 @@ def _build_startup_status() -> dict[str, Any]:
             "message": "Found" if config.USER_RESUME_PATH.exists() else "Missing resume file",
         },
     }
+    tracker_ready = checks["mongodb"]["ok"] or not checks["mongodb"]["configured"]
     overall_ok = (
         checks["firebase_auth"]["ok"]
-        and (checks["mongodb"]["ok"] or not checks["mongodb"]["configured"])
         and (checks["resume_file"]["ok"] or not checks["resume_file"]["required"])
     )
     return {
         "service": "job-agent-backend",
         "overall_ok": overall_ok,
         "cloudflare_warning": not checks["cloudflare_workers_ai"]["ok"],
+        "tracker_warning": not tracker_ready,
         "checked_at": datetime.now().isoformat(timespec="seconds"),
         "checks": checks,
     }

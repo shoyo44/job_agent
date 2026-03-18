@@ -1,11 +1,5 @@
-import type { RunResponse } from "../types/api";
-
-export type AgentStep = {
-  agent: string;
-  title: string;
-  status: string;
-  summary: string;
-};
+import type { AgentStep, RunResponse } from "../types/api";
+import { getAgentFlow, getCurrentProgress, getRunCounts, getRunPayload } from "./runPayload";
 
 const BASE_STEPS: AgentStep[] = [
   {
@@ -76,9 +70,9 @@ export function deriveAgentFlow(latestRun: RunResponse | null): AgentStep[] {
   const steps = cloneBaseSteps();
   if (!latestRun) return steps;
 
-  const payload = (latestRun.payload as Record<string, any> | undefined) ?? {};
-  const backendFlow = payload.agent_flow as AgentStep[] | undefined;
-  if (backendFlow?.length) {
+  const payload = getRunPayload(latestRun);
+  const backendFlow = getAgentFlow(payload);
+  if (backendFlow.length) {
     return backendFlow.map((step) => ({
       agent: step.agent || "Agent",
       title: step.title || "Working",
@@ -87,12 +81,12 @@ export function deriveAgentFlow(latestRun: RunResponse | null): AgentStep[] {
     }));
   }
 
-  const currentProgress = (payload.current_progress as Record<string, any> | undefined) ?? {};
+  const currentProgress = getCurrentProgress(payload) ?? {};
   const currentAgent = typeof currentProgress.agent === "string" ? currentProgress.agent : undefined;
   const currentMessage = typeof currentProgress.message === "string" ? currentProgress.message : undefined;
   let derived = applyProgress(steps, currentAgent, currentMessage);
 
-  const counts = (payload.counts as Record<string, number> | undefined) ?? {};
+  const counts = getRunCounts(payload);
   const appliedCount = counts.applications_processed ?? 0;
   const scoredCount = counts.scored_jobs ?? 0;
   const approvedCount = counts.approved_jobs ?? 0;

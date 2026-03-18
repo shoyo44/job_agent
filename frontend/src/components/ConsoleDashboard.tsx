@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { signInWithPopup, signOut, type User } from 'firebase/auth'
 import { auth, firebaseSetupError, googleProvider } from '../config/firebase'
 import { useRunForm } from '../hooks/useRunForm'
@@ -19,6 +19,7 @@ import type {
   TrackerStatsResponse,
   TrackerHistoryResponse,
 } from '../types/api'
+import { getCoverLetters, getCurrentProgress, getRunCounts, getRunPayload } from '../utils/runPayload'
 
 // Sub-components
 import { LoginScreen } from './LoginScreen'
@@ -66,9 +67,30 @@ export function ConsoleDashboard() {
 
   const isAuthed = useMemo(() => token.length > 0, [token])
   const latestRun = syncRun
-  const currentProgress = ((latestRun?.payload as Record<string, any> | undefined)?.current_progress as Record<string, any> | undefined) ?? null
+  const latestPayload = getRunPayload(latestRun)
+  const currentProgress = getCurrentProgress(latestPayload)
+  const latestCounts = getRunCounts(latestPayload)
+  const latestCoverLetters = getCoverLetters(latestPayload)
 
   const hasRunOutput = Boolean(syncRun)
+
+  const loadPrivate = useCallback(async () => {
+    if (!isAuthed || !onboardingComplete) return
+    try {
+      const [trackerData, historyData, featuresData, docsData] = await Promise.all([
+        getTrackerStats(token),
+        getTrackerHistory(token),
+        getFeatures(token),
+        getDocsSummary(token),
+      ])
+      setTracker(trackerData)
+      setTrackerHistory(historyData)
+      setApiFeatures(featuresData)
+      setDocsSummary(docsData)
+    } catch (e) {
+      setMessage(`Private load failed: ${String(e)}`)
+    }
+  }, [isAuthed, onboardingComplete, token])
 
   useEffect(() => {
     if (!token || !activeRunId || syncRun?.status !== 'running') {
@@ -93,21 +115,21 @@ export function ConsoleDashboard() {
     }, 2000)
 
     return () => window.clearInterval(timer)
-  }, [activeRunId, syncRun?.status, token])
+  }, [activeRunId, loadPrivate, syncRun?.status, token])
 
   useEffect(() => {
     if (!token || !onboardingComplete) {
       return
     }
-    loadPrivate()
-  }, [token, onboardingComplete])
+    void loadPrivate()
+  }, [loadPrivate, onboardingComplete, token])
 
   const checklist = [
     { label: 'Google session connected', done: isAuthed },
     { label: 'Resume and LinkedIn added', done: onboardingComplete },
     { label: 'Pipeline has run', done: hasRunOutput },
-    { label: 'Cover letters generated', done: Boolean((latestRun?.payload as Record<string, any> | undefined)?.cover_letters?.length) },
-    { label: 'At least one application succeeded', done: Boolean((latestRun?.payload as Record<string, any> | undefined)?.counts?.applications_processed) },
+    { label: 'Cover letters generated', done: latestCoverLetters.length > 0 },
+    { label: 'At least one application succeeded', done: Boolean(latestCounts.applications_processed) },
   ]
 
   function buildRunBody(): RunRequest {
@@ -184,22 +206,6 @@ export function ConsoleDashboard() {
     } finally {
       setLoading(false)
     }
-  }
-
-  async function loadPrivate() {
-    if (!isAuthed || !onboardingComplete) return
-    try {
-      const [trackerData, historyData, featuresData, docsData] = await Promise.all([
-        getTrackerStats(token),
-        getTrackerHistory(token),
-        getFeatures(token),
-        getDocsSummary(token),
-      ])
-      setTracker(trackerData)
-      setTrackerHistory(historyData)
-      setApiFeatures(featuresData)
-      setDocsSummary(docsData)
-    } catch (e) { setMessage(`Private load failed: ${String(e)}`) }
   }
 
   async function onRunSync() {

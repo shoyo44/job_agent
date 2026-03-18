@@ -1,4 +1,6 @@
 import type {
+  RunJobSummary,
+  SubmissionPlanFinalist,
   DocsSummaryResponse,
   FeatureResponse,
   RunResponse,
@@ -6,6 +8,7 @@ import type {
   TrackerStatsResponse,
 } from "../types/api";
 import { deriveAgentFlow, describeRunOutcome } from "../utils/runWorkflow";
+import { getCurrentProgress, getProgressExtra, getRunCounts, getRunPayload, getSubmissionFinalists, getSubmissionPlan, getSubmissionPlanFromProgress } from "../utils/runPayload";
 
 interface OverviewPanelProps {
   latestRun: RunResponse | null;
@@ -15,25 +18,34 @@ interface OverviewPanelProps {
   docsSummary: DocsSummaryResponse | null;
 }
 
-type JobSummary = {
-  title?: string;
-  company?: string;
-  confidence_score?: number;
-  work_mode?: string;
-};
-
 export const OverviewPanel: React.FC<OverviewPanelProps> = ({ latestRun, tracker, trackerHistory, apiFeatures, docsSummary }) => {
-  const payload = (latestRun?.payload as Record<string, any> | undefined) ?? {};
-  const counts = (payload.counts as Record<string, number> | undefined) ?? {};
-  const profile = (payload.profile as Record<string, any> | undefined) ?? {};
+  const payload = getRunPayload(latestRun);
+  const counts = getRunCounts(payload);
+  const profile = payload.profile ?? {};
   const agentFlow = deriveAgentFlow(latestRun);
-  const approvedJobs = ((payload.approved_jobs as JobSummary[] | undefined) ?? []).slice(0, 4);
+  const approvedJobs = (payload.approved_jobs ?? []).slice(0, 4) as RunJobSummary[];
   const historyRecords = trackerHistory?.records ?? [];
   const backend = trackerHistory?.backend;
-  const currentProgress = ((latestRun?.payload as Record<string, any> | undefined)?.current_progress as Record<string, any> | undefined) ?? null;
+  const currentProgress = getCurrentProgress(payload);
+  const progressExtra = getProgressExtra(currentProgress);
+  const submissionPlan = getSubmissionPlan(payload) ?? getSubmissionPlanFromProgress(currentProgress);
+  const submissionFinalists = getSubmissionFinalists(submissionPlan);
   const featureGroups = Object.entries(apiFeatures?.features ?? {});
   const docsSections = Object.entries(docsSummary?.sections ?? {});
   const runOutcome = describeRunOutcome(latestRun);
+
+  function renderProgressValue(value: unknown): string {
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      return String(value);
+    }
+    if (Array.isArray(value)) {
+      return `${value.length} item${value.length === 1 ? "" : "s"}`;
+    }
+    if (value && typeof value === "object") {
+      return "Attached";
+    }
+    return "Unknown";
+  }
 
   return (
     <div className="pipeline-overview">
@@ -46,7 +58,7 @@ export const OverviewPanel: React.FC<OverviewPanelProps> = ({ latestRun, tracker
         <div className="pipeline-hero-grid">
           <div className="story-stat">
             <span>Goal</span>
-            <strong>{profile.goal || "No run yet"}</strong>
+            <strong>{typeof profile.goal === "string" ? profile.goal : "No run yet"}</strong>
           </div>
           <div className="story-stat">
             <span>Run Status</span>
@@ -73,20 +85,65 @@ export const OverviewPanel: React.FC<OverviewPanelProps> = ({ latestRun, tracker
           <span className={`badge ${latestRun?.status === "running" ? "warn" : "ok"}`}>{latestRun?.status || "idle"}</span>
         </header>
         {currentProgress ? (
-          <div className="current-progress-grid">
-            <div className="story-stat">
-              <span>Current Agent</span>
-              <strong>{currentProgress.agent || "Unknown"}</strong>
+          <>
+            <div className="current-progress-grid">
+              <div className="story-stat">
+                <span>Current Agent</span>
+                <strong>{currentProgress.agent || "Unknown"}</strong>
+              </div>
+              <div className="story-stat">
+                <span>Phase</span>
+                <strong>{currentProgress.phase || "Unknown"}</strong>
+              </div>
+              <div className="story-stat current-progress-message story-stat-wide">
+                <span>Task</span>
+                <strong>{currentProgress.message || "Waiting for progress update"}</strong>
+              </div>
             </div>
-            <div className="story-stat">
-              <span>Phase</span>
-              <strong>{currentProgress.phase || "Unknown"}</strong>
-            </div>
-            <div className="story-stat current-progress-message story-stat-wide">
-              <span>Task</span>
-              <strong>{currentProgress.message || "Waiting for progress update"}</strong>
-            </div>
-          </div>
+
+            {currentProgress.agent === "SubmissionAgent" && submissionPlan ? (
+              <div className="submission-insight-block">
+                <div className="submission-live-grid">
+                  <div className="story-stat">
+                    <span>Submission Target</span>
+                    <strong>{submissionPlan.target_successes ?? 1} success</strong>
+                  </div>
+                  <div className="story-stat">
+                    <span>Fallback Jobs</span>
+                    <strong>{submissionPlan.jobs_to_try ?? submissionFinalists.length}</strong>
+                  </div>
+                </div>
+
+                {submissionFinalists.length ? (
+                  <div className="submission-plan-stack">
+                    {submissionFinalists.map((job: SubmissionPlanFinalist, index) => (
+                      <div key={`${job.job_id || job.title}-${index}`} className="submission-plan-card">
+                        <div>
+                          <p className="strong">{job.title || "Untitled role"}</p>
+                          <p className="muted">{job.company || "Unknown company"}{job.location ? ` | ${job.location}` : ""}</p>
+                        </div>
+                        <div className="submission-plan-meta">
+                          <span className="badge neutral">Queue {index + 1}</span>
+                          <span>{job.confidence_score ?? 0}/100</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {Object.keys(progressExtra).length && currentProgress.agent !== "SubmissionAgent" ? (
+              <div className="progress-extra-grid">
+                {Object.entries(progressExtra).slice(0, 4).map(([key, value]) => (
+                  <div key={key} className="story-stat">
+                    <span>{key.replace(/_/g, " ")}</span>
+                    <strong>{renderProgressValue(value)}</strong>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </>
         ) : (
           <div className="empty-story">
             <p className="strong">No live phase available</p>

@@ -1,31 +1,39 @@
 import React from "react";
-import type { RunResponse } from "../types/api";
+import type { RunResponse, RunResult, SubmissionPlanFinalist } from "../types/api";
 import { deriveAgentFlow, describeRunOutcome } from "../utils/runWorkflow";
+import { getCoverLetters, getRunCounts, getRunPayload, getRunResults, getSubmissionFinalists, getSubmissionPlan } from "../utils/runPayload";
 
 interface ExecutionOutputProps {
   latestRun: RunResponse | null;
 }
 
-type RunResult = {
-  job?: { title?: string; company?: string; location?: string; url?: string };
-  result?: string;
-  notes?: string;
-};
-
-type CoverLetterEntry = {
-  job_id?: string;
-  title?: string;
-  company?: string;
-  content?: string;
-};
-
 export const ExecutionOutput: React.FC<ExecutionOutputProps> = ({ latestRun }) => {
-  const payload = (latestRun?.payload as Record<string, any> | undefined) ?? {};
-  const results = (payload.results as RunResult[] | undefined) ?? [];
-  const counts = (payload.counts as Record<string, number> | undefined) ?? {};
-  const coverLetters = (payload.cover_letters as CoverLetterEntry[] | undefined) ?? [];
+  const payload = getRunPayload(latestRun);
+  const results = getRunResults(payload);
+  const counts = getRunCounts(payload);
+  const coverLetters = getCoverLetters(payload);
+  const submissionPlan = getSubmissionPlan(payload);
+  const submissionFinalists = getSubmissionFinalists(submissionPlan);
   const agentFlow = deriveAgentFlow(latestRun);
   const runOutcome = describeRunOutcome(latestRun);
+  const successfulResults = results.filter((res) => res.result === "Applied" || res.result === "DryRun");
+
+  function getResultForFinalist(job: SubmissionPlanFinalist): RunResult | undefined {
+    return results.find((result) => {
+      const resultJob = result.job;
+      if (job.job_id && resultJob?.job_id) {
+        return job.job_id === resultJob.job_id;
+      }
+      return job.title === resultJob?.title && job.company === resultJob?.company;
+    });
+  }
+
+  function getPlanBadge(result?: RunResult): { label: string; tone: string } {
+    if (!result) return { label: "Queued", tone: "neutral" };
+    if (result.result === "Applied" || result.result === "DryRun") return { label: result.result, tone: "ok" };
+    if (result.result === "Skipped") return { label: "Skipped", tone: "neutral" };
+    return { label: result.result || "Attempted", tone: "warn" };
+  }
 
   return (
     <div className="results-layout">
@@ -44,7 +52,9 @@ export const ExecutionOutput: React.FC<ExecutionOutputProps> = ({ latestRun }) =
               <div className="story-stat"><span>Run ID</span><strong>{latestRun.run_id}</strong></div>
               <div className="story-stat"><span>Scraped</span><strong>{counts.raw_jobs ?? 0}</strong></div>
               <div className="story-stat"><span>Approved</span><strong>{counts.approved_jobs ?? 0}</strong></div>
+              <div className="story-stat"><span>Attempted</span><strong>{results.length}</strong></div>
               <div className="story-stat"><span>Cover Letters</span><strong>{counts.cover_letters_generated ?? coverLetters.length}</strong></div>
+              <div className="story-stat"><span>Successful</span><strong>{successfulResults.length}</strong></div>
             </div>
             <p className="muted" style={{ marginTop: "1rem" }}>{runOutcome}</p>
           </>
@@ -52,6 +62,52 @@ export const ExecutionOutput: React.FC<ExecutionOutputProps> = ({ latestRun }) =
           <div className="empty-story">
             <p className="strong">No run output yet</p>
             <p className="muted">Start a sync or async run to see the fallback attempts and generated writing here.</p>
+          </div>
+        )}
+      </article>
+
+      <article className="panel">
+        <header className="panel-header">
+          <div>
+            <p className="eyebrow">Submission Strategy</p>
+            <h2>The exact backend fallback order for the submission agent</h2>
+          </div>
+        </header>
+        {submissionFinalists.length ? (
+          <>
+            <div className="submission-live-grid">
+              <div className="story-stat">
+                <span>Target Successes</span>
+                <strong>{submissionPlan?.target_successes ?? 1}</strong>
+              </div>
+              <div className="story-stat">
+                <span>Jobs To Try</span>
+                <strong>{submissionPlan?.jobs_to_try ?? submissionFinalists.length}</strong>
+              </div>
+            </div>
+            <div className="submission-plan-stack">
+              {submissionFinalists.map((job, index) => {
+                const result = getResultForFinalist(job);
+                const badge = getPlanBadge(result);
+                return (
+                  <div key={`${job.job_id || job.title}-${index}`} className="submission-plan-card">
+                    <div>
+                      <p className="strong">{job.title || "Untitled role"}</p>
+                      <p className="muted">{job.company || "Unknown company"}{job.location ? ` | ${job.location}` : ""}</p>
+                    </div>
+                    <div className="submission-plan-meta">
+                      <span className={`badge ${badge.tone}`}>{badge.label}</span>
+                      <span>Queue {index + 1}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        ) : (
+          <div className="empty-story">
+            <p className="strong">No submission strategy captured yet</p>
+            <p className="muted">Once the backend finalizes the approved finalists, the exact fallback order will appear here.</p>
           </div>
         )}
       </article>
@@ -95,7 +151,7 @@ export const ExecutionOutput: React.FC<ExecutionOutputProps> = ({ latestRun }) =
                   <p className="muted">{res.job?.company || "Unknown company"}{res.job?.location ? ` | ${res.job.location}` : ""}</p>
                   {res.notes ? <p className="attempt-note">{res.notes}</p> : null}
                 </div>
-                <div className={`badge ${(res.result === "Applied" || res.result === "DryRun") ? "ok" : "warn"}`}>{res.result || "Unknown"}</div>
+                <div className={`badge ${(res.result === "Applied" || res.result === "DryRun") ? "ok" : res.result === "Skipped" ? "neutral" : "warn"}`}>{res.result || "Unknown"}</div>
               </div>
             ))}
           </div>

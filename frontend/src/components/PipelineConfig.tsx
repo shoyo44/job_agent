@@ -1,14 +1,15 @@
 import React from 'react';
-import type { RunRequest } from '../types/api';
+import type { RunProgress, RunRequest } from '../types/api';
+import { getProgressExtra, getSubmissionFinalists, getSubmissionPlanFromProgress } from '../utils/runPayload';
 
 interface PipelineFormProps {
   form: Partial<RunRequest>;
-  setField: (field: keyof RunRequest, value: any) => void;
+  setField: <K extends keyof RunRequest>(field: K, value: RunRequest[K]) => void;
   onRunSync: () => Promise<void>;
   loading: boolean;
   linkedinEmail: string;
   resumeFileName: string;
-  currentProgress?: Record<string, any> | null;
+  currentProgress?: RunProgress | null;
   runStatus?: string;
 }
 
@@ -22,6 +23,11 @@ export const PipelineForm: React.FC<PipelineFormProps> = ({
   currentProgress,
   runStatus,
 }) => {
+  const liveSubmissionPlan = getSubmissionPlanFromProgress(currentProgress ?? null);
+  const liveSubmissionFinalists = getSubmissionFinalists(liveSubmissionPlan);
+  const liveExtra = getProgressExtra(currentProgress ?? null);
+  const isSubmissionPhase = currentProgress?.agent === 'SubmissionAgent';
+
   return (
     <article className="panel staggered">
       <header className="panel-header">
@@ -32,16 +38,58 @@ export const PipelineForm: React.FC<PipelineFormProps> = ({
       </header>
 
       {currentProgress ? (
-        <div className="run-action-bar current-phase-bar">
-          <div>
-            <p className="strong">Backend is currently in progress</p>
-            <p className="muted small">
-              {currentProgress.agent || 'Agent'} | {currentProgress.phase || 'phase'}
-            </p>
-            <p className="muted small">{currentProgress.message || 'Working on the pipeline.'}</p>
+        <>
+          <div className="run-action-bar current-phase-bar">
+            <div>
+              <p className="strong">Backend is currently in progress</p>
+              <p className="muted small">
+                {currentProgress.agent || 'Agent'} | {currentProgress.phase || 'phase'}
+              </p>
+              <p className="muted small">{currentProgress.message || 'Working on the pipeline.'}</p>
+            </div>
+            <span className={`badge ${runStatus === 'running' ? 'warn' : 'ok'}`}>{runStatus || 'idle'}</span>
           </div>
-          <span className={`badge ${runStatus === 'running' ? 'warn' : 'ok'}`}>{runStatus || 'idle'}</span>
-        </div>
+
+          {isSubmissionPhase ? (
+            <div className="submission-live-panel">
+              <div className="submission-live-grid">
+                <div className="story-stat">
+                  <span>Target Successes</span>
+                  <strong>{liveSubmissionPlan?.target_successes ?? 1}</strong>
+                </div>
+                <div className="story-stat">
+                  <span>Jobs Planned</span>
+                  <strong>{liveSubmissionPlan?.jobs_to_try ?? liveSubmissionFinalists.length}</strong>
+                </div>
+                <div className="story-stat">
+                  <span>Updated</span>
+                  <strong>{currentProgress.updated_at || 'Live'}</strong>
+                </div>
+              </div>
+
+              {liveSubmissionFinalists.length ? (
+                <div className="submission-plan-stack">
+                  {liveSubmissionFinalists.map((job, index) => (
+                    <div key={`${job.job_id || job.title}-${index}`} className="submission-plan-card">
+                      <div>
+                        <p className="strong">{job.title || 'Untitled role'}</p>
+                        <p className="muted">{job.company || 'Unknown company'}{job.location ? ` | ${job.location}` : ''}</p>
+                      </div>
+                      <div className="submission-plan-meta">
+                        <span className="badge neutral">Queue {index + 1}</span>
+                        <span>{job.confidence_score ?? 0}/100</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+
+              {Object.keys(liveExtra).length && !liveSubmissionFinalists.length ? (
+                <p className="muted small">The backend attached extra submission metadata for this phase and the frontend is ready to render it as soon as finalists are available.</p>
+              ) : null}
+            </div>
+          ) : null}
+        </>
       ) : null}
 
       <div className="run-action-bar">
@@ -74,7 +122,7 @@ export const PipelineForm: React.FC<PipelineFormProps> = ({
           Work Mode
           <select
             value={form.work_mode_preference ?? 'any'}
-            onChange={(e) => setField('work_mode_preference', e.target.value)}
+            onChange={(e) => setField('work_mode_preference', e.target.value as RunRequest['work_mode_preference'])}
           >
             <option value="any">Any</option>
             <option value="remote">Remote</option>

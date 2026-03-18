@@ -78,11 +78,83 @@ export type RunRequest = {
   resume_file_b64?: string
 }
 
+export type AgentStep = {
+  agent: string
+  title: string
+  status: string
+  summary: string
+}
+
+export type RunProgress = {
+  agent?: string
+  phase?: string
+  message?: string
+  updated_at?: string
+  extra?: Record<string, unknown>
+}
+
+export type SubmissionPlanFinalist = {
+  job_id?: string
+  title?: string
+  company?: string
+  platform?: string
+  location?: string
+  confidence_score?: number
+}
+
+export type SubmissionPlan = {
+  target_successes?: number
+  jobs_to_try?: number
+  finalists?: SubmissionPlanFinalist[]
+}
+
+export type RunJobSummary = {
+  job_id?: string
+  platform?: string
+  title?: string
+  company?: string
+  location?: string
+  work_mode?: string
+  salary?: string
+  url?: string
+  date_posted?: string
+  confidence_score?: number
+  cover_letter_hint?: string
+}
+
+export type RunResult = {
+  job?: RunJobSummary
+  result?: string
+  notes?: string
+}
+
+export type CoverLetterEntry = {
+  job_id?: string
+  title?: string
+  company?: string
+  content?: string
+}
+
+export type RunPayload = {
+  current_progress?: RunProgress
+  counts?: Record<string, number>
+  profile?: Record<string, unknown>
+  approved_jobs?: RunJobSummary[]
+  cover_letters?: CoverLetterEntry[]
+  agent_flow?: AgentStep[]
+  results?: RunResult[]
+  tracking_backend?: string
+  context_path?: string
+  timestamp?: string
+  scored_jobs?: RunJobSummary[]
+  submission_plan?: SubmissionPlan
+}
+
 export type RunResponse = {
   run_id: string
   status: string
   message: string
-  payload?: Record<string, unknown>
+  payload?: RunPayload
 }
 
 export type AsyncRunResponse = {
