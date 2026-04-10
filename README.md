@@ -12,6 +12,9 @@ It combines:
 - MongoDB (preferred) or Excel (fallback) for application tracking
 - optional Telegram notifications for final run summaries
 
+## Demonstration Video Link:
+https://drive.google.com/file/d/1hxPYVRZK5nlGQREKP5rAn-IkGcaf4rNy/view?usp=sharing
+
 ## Who This Is For
 
 This project is useful if you want to:
